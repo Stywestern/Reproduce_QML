@@ -1,0 +1,13 @@
+# Environments
+.quantum_env/
+
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Editor / IDE specifics
+.vscode/
+
+# Local secrets and configurations
+.env
