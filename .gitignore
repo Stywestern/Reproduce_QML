@@ -1,5 +1,7 @@
 # Environments
 .quantum_env/
+assets/
+data/
 
 # Byte-compiled / optimized files
 __pycache__/
