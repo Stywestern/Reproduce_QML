@@ -7,9 +7,49 @@ import json
 import time
 import datetime
 import numpy as np
+import pulp
 from tqdm import tqdm
 
 from src.problems.stochastic_uc_4gen import FourGeneratorUCModel
+
+
+def solve_continuous_dispatch(u_matrix, problem: FourGeneratorUCModel) -> float:
+    """
+    STAGE 2: The Subproblem.
+    Given a fixed binary schedule (u_matrix) that is known to be feasible, 
+    calculates the exact continuous Megawatt dispatch to minimize variable fuel costs.
+    """
+    lp = pulp.LpProblem("Economic_Dispatch", pulp.LpMinimize)
+
+    # 1. Decision Variables: P_{i,t} (Continuous MW output)
+    P = {}
+    for t in range(problem.num_hours):
+        for i in range(problem.num_gens):
+            is_on = u_matrix[i, t] == 1
+            # If generator is ON, it must operate between P_min and P_max. If OFF, 0 MW.
+            lb = float(problem.p_min[i]) if is_on else 0.0
+            ub = float(problem.p_max[i]) if is_on else 0.0
+            
+            P[i, t] = pulp.LpVariable(f"P_gen{i}_t{t}", lowBound=lb, upBound=ub, cat=pulp.LpContinuous)
+
+    # 2. Objective Function: Minimize Variable Fuel Costs
+    var_cost_terms = [problem.c_var[i] * P[i, t] for t in range(problem.num_hours) for i in range(problem.num_gens)]
+    lp += pulp.lpSum(var_cost_terms)
+
+    # 3. Constraints: Generation must meet Net Demand across all scenarios
+    for t in range(problem.num_hours):
+        for s in range(problem.num_scenarios):
+            net_demand = problem.demand[s, t] - problem.wind[s, t]
+            lp += pulp.lpSum(P[i, t] for i in range(problem.num_gens)) >= net_demand
+
+    # 4. Solve the LP silently
+    lp.solve(pulp.PULP_CBC_CMD(msg=False))
+
+    # 5. Return the optimal variable cost
+    if pulp.LpStatus[lp.status] == 'Optimal':
+        return float(pulp.value(lp.objective))
+    else:
+        return float('inf')
 
 
 def solve_brute_force_sampling(
@@ -22,6 +62,7 @@ def solve_brute_force_sampling(
     """
     Executes a random sampling search over the 24-hour Stochastic Unit Commitment space (2^96 states).
     Evaluates 'sample_budget' random binary configurations using vectorized NumPy batches & tqdm monitoring.
+    Now utilizes a Two-Stage architecture to evaluate True Real Costs.
     """
     print("==========================================================================")
     print(f"       RUNNER: BRUTE-FORCE RANDOM SAMPLING ({num_hours}-HOUR SUC)          ")
@@ -64,7 +105,7 @@ def solve_brute_force_sampling(
         for k in range(current_batch_size):
             u_matrix = batch_u[k]
 
-            # Check Feasibility across all hours & scenarios
+            # STAGE 1: Check Feasibility across all hours & scenarios
             is_feasible = True
             for t in range(num_hours):
                 for s in range(num_scenarios):
@@ -81,14 +122,20 @@ def solve_brute_force_sampling(
             if is_feasible:
                 feasible_samples_count += 1
 
-                # Compute Fixed Commitment Cost
+                # 1. Compute Fixed Commitment Cost
                 fixed_cost = 0.0
                 for t in range(num_hours):
                     for i in range(num_gens):
                         fixed_cost += problem.c_fixed[i] * u_matrix[i, t]
 
-                if fixed_cost < best_cost:
-                    best_cost = fixed_cost
+                # 2. STAGE 2: Compute Variable Fuel Cost via Linear Programming
+                variable_cost = solve_continuous_dispatch(u_matrix, problem)
+                
+                # 3. Calculate TRUE Real Cost
+                true_total_cost = fixed_cost + variable_cost
+
+                if true_total_cost < best_cost:
+                    best_cost = true_total_cost
                     best_commitment_matrix = u_matrix.copy()
                     best_bitstring = "".join(u_matrix.flatten().astype(str))
 
@@ -105,7 +152,7 @@ def solve_brute_force_sampling(
     end_time = time.perf_counter()
     exec_time = round(end_time - start_time, 4)
 
-    # 3. Derive Core Standardized Metrics (Explicit Native Python Casting)
+    # 3. Derive Core Standardized Metrics
     found_solution = bool(best_cost < float("inf"))
     cost_of_solution = float(round(best_cost, 2)) if found_solution else None
     converged = False
@@ -121,15 +168,14 @@ def solve_brute_force_sampling(
     schedule_by_generator = {}
     if found_solution and best_commitment_matrix is not None:
         for i, gen_name in enumerate(problem.gen_names):
-            # Convert NumPy array elements to native Python ints for JSON serialization
             schedule_by_generator[gen_name] = [int(val) for val in best_commitment_matrix[i, :]]
 
-    # 5. Build Comprehensive JSON Payload (All Native Python Types)
+    # 5. Build Comprehensive JSON Payload
     results_payload = {
         "metadata": {
             "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "experiment_name": "4-Generator Stochastic Unit Commitment",
-            "solver_name": "Brute-Force / Random Sampling Baseline",
+            "solver_name": "Brute-Force / Random Sampling (Two-Stage LP)",
             "seed_used": int(seed)
         },
         "core_required_metrics": {
@@ -168,7 +214,7 @@ if __name__ == "__main__":
     solve_brute_force_sampling(
         num_hours=24,
         num_scenarios=3,
-        sample_budget=10**8,
+        sample_budget=10**6,
         batch_size=10000,
         seed=2
     )

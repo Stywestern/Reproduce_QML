@@ -11,65 +11,69 @@ import pulp
 ############################################################################################
 
 def cqm_to_pulp(cqm: dimod.ConstrainedQuadraticModel) -> tuple[pulp.LpProblem, dict]:
-    """
-    Translates a dimod.CQM object into a native PuLP LpProblem representation.
-    Supports both Binary decision variables and Continuous Real variables.
-    
-    Returns:
-        prob (pulp.LpProblem): The configured PuLP problem instance.
-        pulp_vars (dict): Mapping from variable names to pulp.LpVariable instances.
-    """
     prob = pulp.LpProblem("CQM_Converted_Model", pulp.LpMinimize)
 
-    # 1. Register Variables (Binary + Real / Continuous)
+    # 1. Register Variables & Track Spin Mappings
     pulp_vars = {}
+    is_spin_var = {}
+
     for var in cqm.variables:
         vartype = cqm.vartype(var)
         var_str = str(var)
 
         if vartype == dimod.BINARY:
             pulp_vars[var_str] = pulp.LpVariable(var_str, cat=pulp.LpBinary)
+            is_spin_var[var_str] = False
         elif vartype == dimod.SPIN:
-            # Map Ising spin {-1, +1} to binary {0, 1}
             pulp_vars[var_str] = pulp.LpVariable(var_str, cat=pulp.LpBinary)
+            is_spin_var[var_str] = True
         elif vartype == dimod.REAL:
             lb = cqm.lower_bound(var)
             ub = cqm.upper_bound(var)
-            pulp_vars[var_str] = pulp.LpVariable(
-                var_str, 
-                lowBound=lb, 
-                upBound=ub, 
-                cat=pulp.LpContinuous
-            )
+            pulp_vars[var_str] = pulp.LpVariable(var_str, lowBound=lb, upBound=ub, cat=pulp.LpContinuous)
+            is_spin_var[var_str] = False
         else:
             raise ValueError(f"Unsupported vartype '{vartype}' for variable '{var}'.")
 
-    # 2. Objective Function Construction
-    if cqm.objective.quadratic:
-        raise ValueError("CQM model contains quadratic objective terms! CBC linear solver requires linear objectives.")
+    # 2. Build Objective Function
+    obj_expr = pulp.LpAffineExpression()
+    running_offset = cqm.objective.offset
 
-    obj_terms = [bias * pulp_vars[str(var)] for var, bias in cqm.objective.linear.items()]
-    obj_expr = pulp.lpSum(obj_terms) + cqm.objective.offset
-    prob += obj_expr
+    for var, bias in cqm.objective.linear.items():
+        var_str = str(var)
+        if is_spin_var[var_str]:
+            obj_expr += (2.0 * bias) * pulp_vars[var_str]
+            running_offset -= bias
+        else:
+            obj_expr += bias * pulp_vars[var_str]
 
-    # 3. Constraints Construction
+    prob += obj_expr + running_offset
+
+    # 3. Build Constraints (THE FIX IS HERE)
     for label, constraint in cqm.constraints.items():
-        if constraint.lhs.quadratic:
-            raise ValueError(f"Constraint '{label}' contains quadratic terms! CBC requires linear constraints.")
+        lhs_expr = pulp.LpAffineExpression()
+        
+        # safely extract RHS (defaults to 0.0 if not present) and subtract the offset
+        rhs_val = getattr(constraint, 'rhs', 0.0)
+        running_rhs = rhs_val - constraint.lhs.offset
 
-        # Build linear expression for LHS
-        lhs_terms = [bias * pulp_vars[str(var)] for var, bias in constraint.lhs.linear.items()]
-        lhs_expr = pulp.lpSum(lhs_terms)
+        for var, bias in constraint.lhs.linear.items():
+            var_str = str(var)
+            if is_spin_var[var_str]:
+                lhs_expr += (2.0 * bias) * pulp_vars[var_str]
+                running_rhs += bias
+            else:
+                lhs_expr += bias * pulp_vars[var_str]
 
-        # Move numerical offset to RHS: lhs_expr + offset <= 0  ==>  lhs_expr <= -offset
-        rhs = -constraint.lhs.offset
-        sense_str = str(constraint.sense)
+        sense_str = str(getattr(constraint.sense, 'value', constraint.sense))
 
-        if "<=" in sense_str or constraint.sense == dimod.Sense.Le:
-            prob += (lhs_expr <= rhs, str(label))
-        elif ">=" in sense_str or constraint.sense == dimod.Sense.Ge:
-            prob += (lhs_expr >= rhs, str(label))
-        elif "==" in sense_str or constraint.sense == dimod.Sense.Eq:
-            prob += (lhs_expr == rhs, str(label))
+        if "<=" in sense_str or "Le" in sense_str:
+            prob += (lhs_expr <= running_rhs, str(label))
+        elif ">=" in sense_str or "Ge" in sense_str:
+            prob += (lhs_expr >= running_rhs, str(label))
+        elif "==" in sense_str or "Eq" in sense_str:
+            prob += (lhs_expr == running_rhs, str(label))
+        else:
+            raise ValueError(f"Unrecognized constraint sense '{sense_str}' on constraint '{label}'")
 
     return prob, pulp_vars
