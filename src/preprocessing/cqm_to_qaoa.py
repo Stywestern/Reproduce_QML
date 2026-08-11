@@ -1,11 +1,15 @@
-# ############################################################################################
-#                   PREPROCESSING: CQM TO QAOA ISING OPERATOR
+############################################################################################
+#                                       Imports
 ############################################################################################
 
+# Third Party Libraries
 import dimod
 from qiskit_optimization import QuadraticProgram
 from qiskit_optimization.converters.quadratic_program_to_qubo import QuadraticProgramToQubo
 
+############################################################################################
+#                                       Main Block
+############################################################################################
 
 def cqm_to_qaoa_operator(cqm: dimod.ConstrainedQuadraticModel, lagrange_mult: float = 3.0):
     """

@@ -1,11 +1,17 @@
 ############################################################################################
-#                      UTILS: QPHR-ALM MATHEMATICAL CALCULATIONS
+#                                       Imports
 ############################################################################################
 
+# Native Libraries
 import math
+
+# Third Party Libraries
 import numpy as np
 import dimod
 
+############################################################################################
+#                                       Main Block
+############################################################################################
 
 def parse_cqm_constraints(cqm: dimod.ConstrainedQuadraticModel) -> list[dict]:
     """

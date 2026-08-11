@@ -1,20 +1,27 @@
 ############################################################################################
-#                       ALGORITHMS: GATE-BASED QAOA SIMULATOR
+#                                       Imports
 ############################################################################################
 
+# Native Libraries
 import time
 import warnings
 import numpy as np
 
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-warnings.filterwarnings("ignore", category=UserWarning)
+# Modules
+from src.tools.qaoa_ansatz_builder import build_qaoa_ansatz
 
+# Third Party Libraries
 from qiskit_algorithms import SamplingVQE
 from qiskit_algorithms.optimizers import COBYLA
 from qiskit.primitives import StatevectorSampler
 
-from src.tools.qaoa_ansatz_builder import build_qaoa_ansatz
+# Setup
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
+############################################################################################
+#                                       Main Block
+############################################################################################
 
 def run_qaoa_gate_sim(op, offset: float, qubo_qp, cqm, original_vars, reps: int = 2, seed: int = 2):
     """
@@ -79,7 +86,7 @@ def run_qaoa_gate_sim(op, offset: float, qubo_qp, cqm, original_vars, reps: int 
 
 
 ############################################################################################
-#                               Execution / Verification Block
+#                                  Execution Block
 ############################################################################################
 if __name__ == "__main__":
     from src.problems.math_baseline import AppendixAModel

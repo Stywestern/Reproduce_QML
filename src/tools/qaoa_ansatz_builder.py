@@ -1,11 +1,16 @@
 ############################################################################################
-#                      UTILS: QAOA CIRCUIT & ANSATZ BUILDERS
+#                                       Imports
 ############################################################################################
 
+# Third Party Libraries
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector
 from qiskit.circuit.library import QAOAAnsatz
+
+############################################################################################
+#                                       Main Block
+############################################################################################
 
 
 def build_qaoa_ansatz(

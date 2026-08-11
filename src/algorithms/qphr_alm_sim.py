@@ -1,12 +1,12 @@
 ############################################################################################
-#                      ALGORITHMS: QPHR-ALM ADAPTIVE HYBRID LOOP
+#                                       Imports
 ############################################################################################
 
+# Native Libraries
 import time
 import numpy as np
-import dimod
-import neal
 
+# Modules
 from src.tools.qphr_math import (
     parse_cqm_constraints,
     evaluate_g_i,
@@ -14,6 +14,14 @@ from src.tools.qphr_math import (
     compute_residual_R
 )
 
+# Third Party Libraries
+from dwave.system import DWaveSampler, EmbeddingComposite, FixedEmbeddingComposite
+import dimod
+import neal
+
+############################################################################################
+#                                       Main Block
+############################################################################################
 
 def run_qphr_alm_loop(
     cqm: dimod.ConstrainedQuadraticModel,
@@ -115,7 +123,7 @@ def run_qphr_alm_loop(
 
 
 ############################################################################################
-#                               Execution / Verification Block
+#                                  Execution Block
 ############################################################################################
 if __name__ == "__main__":
     from src.problems.math_baseline import AppendixAModel

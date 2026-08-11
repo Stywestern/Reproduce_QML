@@ -1,14 +1,21 @@
 ############################################################################################
-#                   ALGORITHMS: SIMULATED ANNEALING (NEAL / D-WAVE SIM)
+#                                       Imports
 ############################################################################################
 
+# Native Libraries
 import time
 import warnings
+
+# Third Party Libraries
 import dimod
 import neal
 
+# Setup
 warnings.filterwarnings("ignore")
 
+############################################################################################
+#                                       Main Block
+############################################################################################
 
 def run_neal_simulated_annealing(
     bqm: dimod.BinaryQuadraticModel,
@@ -116,7 +123,7 @@ def run_neal_simulated_annealing(
 
 
 ############################################################################################
-#                               Execution / Verification Block
+#                                  Execution Block
 ############################################################################################
 if __name__ == "__main__":
     from src.problems.math_baseline import AppendixAModel
