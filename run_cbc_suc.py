@@ -10,7 +10,7 @@ import dimod
 import pulp
 import numpy as np
 
-from src.problems.stochastic_uc_4gen import FourGeneratorUCModel
+from problems.suc_problem_generator import FourGeneratorUCModel
 from src.preprocessing.cqm_to_pulp import cqm_to_pulp
 
 

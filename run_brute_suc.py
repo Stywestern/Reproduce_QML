@@ -10,7 +10,7 @@ import numpy as np
 import pulp
 from tqdm import tqdm
 
-from src.problems.stochastic_uc_4gen import FourGeneratorUCModel
+from problems.suc_problem_generator import FourGeneratorUCModel
 
 
 def solve_continuous_dispatch(u_matrix, problem: FourGeneratorUCModel) -> float:

@@ -9,7 +9,6 @@ import dimod
 #                                       Main Block
 ############################################################################################
 
-
 def cqm_to_bqm_slack(cqm: dimod.ConstrainedQuadraticModel, lagrange_mult: float = 3.0):
     """
     Translates a dimod.CQM into a dimod.BQM by converting inequality constraints into 
