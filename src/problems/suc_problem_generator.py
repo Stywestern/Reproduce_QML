@@ -5,9 +5,8 @@
 # Third Party Libraries
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Callable
 import numpy as np
-from scipy.optimize import linprog, milp, LinearConstraint, Bounds
+import scipy.sparse as sp
 
 """
 Modular pipeline for reproducing "Qubit-Efficient Quantum Annealing for
@@ -40,25 +39,39 @@ Layers:
         (QUBO-based backends: next step, see chat)
 """
 
-# ==========================================================================
-# 1. Problem data -- fully parameterized so N/T/K can all be changed. One can even add more constraints with some work.
-# ==========================================================================
+# ###########################################################################################################################################
+# 1. Problem data -- fully parameterized so S/T/K can all be changed. One can even add more parameters with some work.
+# ###########################################################################################################################################
 
 @dataclass
 class SUCProblemData:
     num_gens: int              # N
     num_hours: int             # T
-    num_scenarios: int         # K
+    num_scenarios: int         # S
     p_min: np.ndarray          # (N,), p = power of generator in MW
     p_max: np.ndarray          # (N,)
     c_var: np.ndarray          # (N,)  $/MWh, c = cost of generators variable output
     c_fixed: np.ndarray        # (N,)  $/h, cost of just running it on
     min_up: np.ndarray         # (N,) integer hours, T^U_g, a generator must stay on for this much hours when opened
     min_down: np.ndarray       # (N,) integer hours, T^D_g
-    scenario_probs: np.ndarray  # (K,), sums to 1
-    demand: np.ndarray         # (K, T), generators must met this
-    wind: np.ndarray           # (K, T), eases the generator load
-    shed_cost: float = 1000.0  # If in any scenario we have to cut electricity from people
+    initial_status: np.ndarray  # (N,), 0 = initially off, 1 = initially on
+    scenario_probs: np.ndarray  # (S,), sums to 1
+    demand: np.ndarray         # (S, T), generators must met this
+    wind: np.ndarray           # (S, T), eases the generator load
+    shed_cost: float = 1000.0  # $/MWh, If in any scenario we have to cut electricity from people, we want to penalize that
+
+    def __post_init__(self):
+            N, T, S = self.num_gens, self.num_hours, self.num_scenarios
+            assert self.p_min.shape == (N,) and self.p_max.shape == (N,)
+            assert np.all(self.p_min <= self.p_max), "p_min must be <= p_max for every generator"
+            assert self.c_var.shape == (N,) and self.c_fixed.shape == (N,)
+            assert self.min_up.shape == (N,) and self.min_down.shape == (N,)
+            assert np.all(self.min_up >= 1) and np.all(self.min_down >= 1)
+            assert self.initial_status.shape == (N,)
+            assert np.all(np.isin(self.initial_status, [0, 1]))
+            assert self.scenario_probs.shape == (S,)
+            assert abs(self.scenario_probs.sum() - 1.0) < 1e-9, "scenario_probs must sum to 1"
+            assert self.demand.shape == (S, T) and self.wind.shape == (S, T)
 
     @classmethod
     def generate(cls, num_gens: int, num_hours: int, num_scenarios: int,seed: int = 2,
@@ -68,6 +81,7 @@ class SUCProblemData:
                  c_fixed: np.ndarray | None = None,
                  min_up: np.ndarray | None = None,
                  min_down: np.ndarray | None = None,
+                 initial_status: np.ndarray | None = None,
                  scenario_probs: np.ndarray | None = None,
                  demand: np.ndarray | None = None,
                  wind: np.ndarray | None = None,
@@ -98,7 +112,7 @@ class SUCProblemData:
         actual_c_fixed = c_fixed if c_fixed is not None else 500 - 400 * tier
         actual_shed_cost = shed_cost if shed_cost is not None else 1000.0
 
-        # 3. Operational Timings
+        # 3. Operational Structures
         if min_up is not None:
             actual_min_up = min_up
         else:
@@ -108,6 +122,11 @@ class SUCProblemData:
             actual_min_down = min_down
         else:
             actual_min_down = actual_min_up.copy()
+
+        if initial_status is not None:
+            actual_initial_status = initial_status
+        else:
+            actual_initial_status = np.zeros(num_gens, dtype=int)
 
         # 4. Scenarios & Weather Data
         actual_probs = scenario_probs if scenario_probs is not None else np.full(num_scenarios, 1.0 / num_scenarios)
@@ -141,135 +160,58 @@ class SUCProblemData:
             c_var=actual_c_var,
             c_fixed=actual_c_fixed, 
             min_up=actual_min_up, 
-            min_down=actual_min_down, 
+            min_down=actual_min_down,
+            initial_status=actual_initial_status,
             scenario_probs=actual_probs, 
             demand=actual_demand, 
             wind=actual_wind,
             shed_cost=actual_shed_cost
         )
 
-
-# ==========================================================================
-# 2. Dispatch subproblem: per-scenario continuous LP given FIXED u.
-#    Fully implemented; independent of any quantum machinery.
-# ==========================================================================
+# ###########################################################################################################################################
+# 2. Mathematical Backend - Enables transfering of the problem into any preprocessing algorithm
+# ###########################################################################################################################################
+@dataclass
+class Variable:
+    name: str           # gen1_s3_t12
+    vtype: str          # "B", "I", "C"
+    lower: float        # Lowest cap of an initiated variable's value
+    upper: float        # Highest
 
 @dataclass
-class DispatchResult:
-    cost: float              # total cost in dollars
-    P: np.ndarray            # (N, T), generated power of every gen for every time instance
-    shed: np.ndarray         # (T,)
-    theta: np.ndarray        # (N, T) -- d(cost)/d(u[g,t]), the Benders dual
+class Constraint:
+    coefficients: dict[str, float] # like "P_gen0_hr0_scen0": 1.0
+    sense: str    # "<=", ">=", "="
+    rhs: float
+    name: str
 
+@dataclass
+class Objective:
+    coefficients: dict[str, float]
+    constant: float = 0.0
+    sense: str = "min"
 
-class DispatchSubproblem:
-    """
-    For ONE scenario h and a FIXED commitment u (shape N x T), solves:
-        min  sum_{g,t} c_var[g]*P[g,t] + shed_cost * sum_t shed[t]
-        s.t. P[g,t] - p_max[g]*u[g,t] <= 0                (upper coupling)
-             p_min[g]*u[g,t] - P[g,t] <= 0                (lower coupling)
-             sum_g P[g,t] + shed[t] = net_demand[t]        (power balance)
-             P, shed >= 0
-
-    theta[g,t] = p_max[g]*mu_upper[g,t] - p_min[g]*mu_lower[g,t], by the
-    envelope theorem applied to the two u-dependent bound constraints --
-    this is exactly theta_{g,t}(xi_h) in eq. (2c)/(3e) of the paper.
-
-    NOTE: validate this sign convention against the hand-solved single-hour
-    examples (mu_A=5 etc.) before trusting it on a new instance -- scipy's
-    HiGHS marginal-sign convention should be treated as an assumption here,
-    not a certainty, until cross-checked.
-    """
-
-    def __init__(self, problem: SUCProblemData):
-        self.pd = problem
-
-    def solve(self, u: np.ndarray, scenario_idx: int) -> DispatchResult:
-        N, T = self.pd.num_gens, self.pd.num_hours
-        s = scenario_idx
-        net_demand = self.pd.demand[s] - self.pd.wind[s]
-
-        # Variable order: P[g,t] flattened (g-major), then shed[t]
-        n_P = N * T
-        n_x = n_P + T
-
-        def p_idx(g, t):
-            return g * T + t
-
-        def shed_idx(t):
-            return n_P + t
-
-        c = np.zeros(n_x)
-        for g in range(N):
-            for t in range(T):
-                c[p_idx(g, t)] = self.pd.c_var[g]
-        c[n_P:] = self.pd.shed_cost
-
-        # Inequality constraints A_ub x <= b_ub : the two u-coupling bounds
-        rows_ub, b_ub = [], []
-        for g in range(N):
-            for t in range(T):
-                # P[g,t] - p_max[g]*u[g,t] <= 0
-                row = np.zeros(n_x)
-                row[p_idx(g, t)] = 1.0
-                rows_ub.append(row)
-                b_ub.append(self.pd.p_max[g] * u[g, t])
-                # p_min[g]*u[g,t] - P[g,t] <= 0  ->  -P[g,t] <= -p_min*u
-                row2 = np.zeros(n_x)
-                row2[p_idx(g, t)] = -1.0
-                rows_ub.append(row2)
-                b_ub.append(-self.pd.p_min[g] * u[g, t])
-        A_ub = np.array(rows_ub)
-        b_ub = np.array(b_ub)
-
-        # Equality: sum_g P[g,t] + shed[t] = net_demand[t]
-        A_eq = np.zeros((T, n_x))
-        for t in range(T):
-            for g in range(N):
-                A_eq[t, p_idx(g, t)] = 1.0
-            A_eq[t, shed_idx(t)] = 1.0
-        b_eq = net_demand
-
-        bounds = [(0, None)] * n_x
-
-        res = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq,
-                       bounds=bounds, method="highs")
-        if not res.success:
-            raise RuntimeError(f"Dispatch subproblem infeasible for scenario {s}: {res.message}")
-
-        P = res.x[:n_P].reshape(N, T)
-        shed = res.x[n_P:]
-
-        # Duals on the two coupling rows per (g,t); HiGHS orders A_ub rows as we built them: pairs (upper, lower) per (g,t) in insertion order.
-        marg = res.ineqlin.marginals  # shape (2*N*T,), sign per scipy convention
-        theta = np.zeros((N, T))
-        row = 0
-        for g in range(N):
-            for t in range(T):
-                mu_upper = -marg[row]      # flip sign: marginal on "<=" is <=0 in HiGHS
-                mu_lower = -marg[row + 1]
-                theta[g, t] = self.pd.p_max[g] * mu_upper - self.pd.p_min[g] * mu_lower
-                row += 2
-
-        return DispatchResult(cost=res.fun, P=P, shed=shed, theta=theta)
-
-
-# ==========================================================================
-# 3. Generic (c, A, b) layer -- solver-agnostic, NOT SUC-specific.
-# ==========================================================================
+@dataclass
+class MathematicalModel:
+    variables: list[Variable]
+    constraints: list[Constraint]
+    objective: Objective
 
 @dataclass
 class MixedLBOProblem:
-    """min c^T x  s.t.  A x <= b,  x_i in [lower_i, upper_i],
+    """
+    min c^T x  s.t.  row_lower <= A x <= row_upper,  x_i in [lower_i, upper_i],
     x_i binary if var_types[i] == 'B', continuous if 'C'.
-    This is the ONE object every solver backend consumes."""
+    """
+    
     var_names: list[str]
-    var_types: list[str]      # 'B' or 'C', one per variable
+    var_types: list[str]         # 'B' or 'C', one per variable
     lower: np.ndarray
     upper: np.ndarray
     c: np.ndarray
-    A: np.ndarray
-    b: np.ndarray
+    A: sp.csr_matrix
+    row_lower: np.ndarray
+    row_upper: np.ndarray
     constraint_labels: list[str]
 
     def var_index(self, name: str) -> int:
@@ -277,196 +219,238 @@ class MixedLBOProblem:
 
 
 class LBOBuilder:
-    """Incremental builder: register variables, then add objective terms and
+    """
+    Incremental builder: register variables, then add objective terms and
     constraint rows by NAME (not index), then .build() materializes the
-    matrices. Keeps BendersMasterBuilder's code readable."""
+    sparse matrices. Rows are accumulated as (name -> coeff) dicts and only
+    assembled into a COO/CSR matrix at build() time -- O(nnz), not O(m*n).
+    """
 
     def __init__(self):
-        self._names: list[str] = []
-        self._types: list[str] = []
-        self._lower: list[float] = []
-        self._upper: list[float] = []
+        self._variables: list[Variable] = []
+        self._constraints: list[Constraint] = []
+        self._objective = Objective(coefficients={})
         self._index: dict[str, int] = {}
-        self._c: dict[str, float] = {}
-        self._rows: list[dict[str, float]] = []
-        self._rhs: list[float] = []
-        self._labels: list[str] = []
 
-    def add_var(self, name: str, vtype: str, lower: float = 0.0, upper: float = 1.0) -> None:
+    def add_var(self, name, vtype, lower=0.0, upper=1.0):
         assert name not in self._index, f"duplicate variable {name}"
-        self._index[name] = len(self._names)
-        self._names.append(name)
-        self._types.append(vtype)
-        self._lower.append(lower)
-        self._upper.append(upper)
+        assert vtype in ("B", "I", "C"), f"unknown variable type {vtype!r}"
 
-    def add_objective_term(self, name: str, coeff: float) -> None:
-        self._c[name] = self._c.get(name, 0.0) + coeff
+        idx = len(self._variables)
+        self._index[name] = idx
+        self._variables.append(Variable(name, vtype, lower, upper))
 
-    def add_constraint(self, coeffs: dict[str, float], rhs: float, label: str = "") -> None:
-        """Adds one row: sum(coeffs[v]*v) <= rhs."""
-        self._rows.append(coeffs)
-        self._rhs.append(rhs)
-        self._labels.append(label)
+    def add_objective_term(self, name, coeff):
+        idx = self._index[name]
+        self._objective.coefficients[idx] = \
+            self._objective.coefficients.get(idx, 0.0) + coeff
 
-    def build(self) -> MixedLBOProblem:
-        n = len(self._names)
-        c = np.zeros(n)
-        for name, coeff in self._c.items():
-            c[self._index[name]] = coeff
+    def add_constraint(self, coeffs, rhs, sense="<=", label=""):
+        assert sense in {"<=", ">=", "="}
 
-        m = len(self._rows)
-        A = np.zeros((m, n))
-        for i, row in enumerate(self._rows):
-            for name, coeff in row.items():
-                A[i, self._index[name]] = coeff
-        b = np.array(self._rhs)
-
-        return MixedLBOProblem(
-            var_names=self._names, var_types=self._types,
-            lower=np.array(self._lower), upper=np.array(self._upper),
-            c=c, A=A, b=b, constraint_labels=self._labels,
+        self._constraints.append(
+            Constraint(
+                coefficients={self._index[name]: coeff for name, coeff in coeffs.items()},
+                sense=sense,
+                rhs=rhs,
+                name=label
+            )
         )
 
+    def build(self) -> MathematicalModel:
+        return MathematicalModel(
+            variables=self._variables,
+            constraints=self._constraints,
+            objective=self._objective
+        )
 
-def binary_encode_continuous(problem: MixedLBOProblem, var_name: str,
-                              num_bits: int, scale: float) -> MixedLBOProblem:
+    def compile(self) -> MixedLBOProblem:
+        model = self.build()
+
+        n = len(model.variables)
+        m = len(model.constraints)
+
+        c = np.zeros(n)
+        for i, coeff in model.objective.coefficients.items():
+            c[i] = coeff
+
+        row_idx, col_idx, data = [], [], []
+        row_lower = np.empty(m)
+        row_upper = np.empty(m)
+
+        for r, constraint in enumerate(model.constraints):
+            for i, coeff in constraint.coefficients.items():
+                if coeff != 0:
+                    row_idx.append(r)
+                    col_idx.append(i)
+                    data.append(coeff)
+
+            if constraint.sense == "<=":
+                row_lower[r], row_upper[r] = -np.inf, constraint.rhs
+            elif constraint.sense == ">=":
+                row_lower[r], row_upper[r] = constraint.rhs, np.inf
+            else:
+                row_lower[r] = row_upper[r] = constraint.rhs
+
+        A = sp.coo_matrix(
+            (data, (row_idx, col_idx)),
+            shape=(m, n)
+        ).tocsr()
+
+        return MixedLBOProblem(
+            var_names=[v.name for v in model.variables],
+            var_types=[v.vtype for v in model.variables],
+            lower=np.array([v.lower for v in model.variables]),
+            upper=np.array([v.upper for v in model.variables]),
+            c=c,
+            A=A,
+            row_lower=row_lower,
+            row_upper=row_upper,
+            constraint_labels=[c.name for c in model.constraints]
+        )
+
+# ###########################################################################################################################################
+# 3. Model Formulation - creates the objective function and basic constraints
+# ###########################################################################################################################################
+
+class SUCModelBuilder:
     """
-    Generic preprocessing transform (paper's eq. under III-A/1): replaces
-    ONE continuous variable y (0 <= y <= scale*(2^num_bits - 1)) with
-    num_bits new binary variables y_j, via y = scale * sum_j 2^j * y_j.
-    Substitutes this into the objective and every constraint row, then
-    drops the original continuous column. Works on ANY MixedLBOProblem,
-    not just the SUC master's Upsilon -- reusable preprocessing step.
+    Builds the baseline Stochastic Unit Commitment (SUC) Problem.
+    It ONLY defines the variables, the objective function, and the fundamental 
+    laws of physics (power balance & generator capacity limits).
+    
+    The self.builder remains open so custom constraints can be added later!
     """
-    idx = problem.var_index(var_name)
-    assert problem.var_types[idx] == "C", f"{var_name} is not continuous"
+    def __init__(self, problem_data: SUCProblemData):
+        self.pd = problem_data
+        self.builder = LBOBuilder()
 
-    new_names = [n for i, n in enumerate(problem.var_names) if i != idx]
-    bit_names = [f"{var_name}_bit{j}" for j in range(num_bits)]
-    new_names = new_names + bit_names
+    # ----------------------------------------------------------------------
+    # Helper Methods: Creating standardized names for variables
+    # ----------------------------------------------------------------------
+    def _u_name(self, g: int, t: int) -> str: # on/off
+        return f"u_gen{g}_hr{t}"
 
-    new_types = [t for i, t in enumerate(problem.var_types) if i != idx] + ["B"] * num_bits
-    new_lower = np.concatenate([np.delete(problem.lower, idx), np.zeros(num_bits)])
-    new_upper = np.concatenate([np.delete(problem.upper, idx), np.ones(num_bits)])
+    def _p_name(self, g: int, t: int, s: int) -> str: # MW per gen
+        return f"P_gen{g}_hr{t}_scen{s}"
 
-    keep_mask = np.ones(len(problem.var_names), dtype=bool)
-    keep_mask[idx] = False
+    def _shed_name(self, t: int, s: int) -> str: # MW deficit
+        return f"shed_hr{t}_scen{s}"
 
-    weights = scale * (2.0 ** np.arange(num_bits))
+    # ----------------------------------------------------------------------
+    # Step 1: Declare all the variables
+    # ----------------------------------------------------------------------
+    def setup_variables(self):
+        N, T, S = self.pd.num_gens, self.pd.num_hours, self.pd.num_scenarios
+        
+        # 1. Binary Commitment Variables (u)
+        for g in range(N):
+            for t in range(T):
+                self.builder.add_var(self._u_name(g, t), "B", lower=0.0, upper=1.0) # 'B' means Binary (0 or 1)
 
-    # Objective: c_y * y  ->  sum_j c_y * weight_j * y_bit_j
-    c_y = problem.c[idx]
-    new_c = np.concatenate([problem.c[keep_mask], c_y * weights])
+        # 2. Continuous Power (P) and Load Shedding (shed) variables
+        for s in range(S):
+            for t in range(T):
+                self.builder.add_var(self._shed_name(t, s), "C", lower=0.0, upper=10000.0) # Shedding can go from 0 up to a huge number depending on problem (10,000 as a safe upper bound)
+                for g in range(N):
+                    self.builder.add_var(self._p_name(g, t, s), "C", lower=0.0, upper=self.pd.p_max[g]) # Power 'P' is Continuous ('C'). It can be 0 or go up to the generator's max.
 
-    # Constraints: A[:, idx] * y  ->  A[:, idx] contributes weight_j * A[:,idx] to each bit col
-    A_kept = problem.A[:, keep_mask]
-    A_y = problem.A[:, idx:idx + 1]                 # (m, 1)
-    A_bits = A_y @ weights.reshape(1, -1)            # (m, num_bits)
-    new_A = np.hstack([A_kept, A_bits])
+    # ----------------------------------------------------------------------
+    # Step 2: Formulate the Objective Function
+    # ----------------------------------------------------------------------
+    def setup_objective(self):
+        N, T, S = self.pd.num_gens, self.pd.num_hours, self.pd.num_scenarios
+        
+        # 1. Fixed Commitment Costs
+        for g in range(N):
+            for t in range(T):
+                self.builder.add_objective_term(self._u_name(g, t), self.pd.c_fixed[g])
 
-    return MixedLBOProblem(
-        var_names=new_names, var_types=new_types,
-        lower=new_lower, upper=new_upper,
-        c=new_c, A=new_A, b=problem.b.copy(),
-        constraint_labels=list(problem.constraint_labels),
-    )
+        # 2. Expected Dispatch Costs
+        for s in range(S):
+            prob = self.pd.scenario_probs[s] # The probability p_omega
+            for t in range(T):
+                expected_shed_cost = prob * self.pd.shed_cost
+                self.builder.add_objective_term(self._shed_name(t, s), expected_shed_cost)
+                for g in range(N):
+                    expected_var_cost = prob * self.pd.c_var[g]
+                    self.builder.add_objective_term(self._p_name(g, t, s), expected_var_cost)
 
+    # ----------------------------------------------------------------------
+    # Step 3: Formulate the Core Constraints
+    # ----------------------------------------------------------------------
 
-# ==========================================================================
-# 4. SUC-specific: master problem builder.
-# ==========================================================================
+    def setup_power_balance_constraints(self):
+        N, T, S = self.pd.num_gens, self.pd.num_hours, self.pd.num_scenarios
 
-class BendersMasterBuilder:
-    """
-    Owns the master's structural constraints (min up/down time, fixed once)
-    and its growing cut set (one row added per Benders iteration).
-    emit() returns the CURRENT master as a MixedLBOProblem -- u binary,
-    Upsilon continuous, ready either for a classical MILP solver as-is, or
-    for binary_encode_continuous(..., "Upsilon", ...) before a QUBO backend.
-    """
+        for s in range(S):
+            for t in range(T):
+                net_demand = self.pd.demand[s, t] - self.pd.wind[s, t]
+                coeffs = {self._shed_name(t, s): 1.0}
+                for g in range(N):
+                    coeffs[self._p_name(g, t, s)] = 1.0
+                self.builder.add_constraint(coeffs, sense="=", rhs=net_demand, label=f"balance_s{s}_t{t}")
 
-    def __init__(self, problem: SUCProblemData, upsilon_upper_bound: float):
-        self.pd = problem
-        self.upsilon_upper = upsilon_upper_bound
-        self._cuts: list[dict] = []  # each: {"coeffs": {...}, "rhs": float}
+    
+    def setup_generator_limit_constraints(self):
+        N, T, S = self.pd.num_gens, self.pd.num_hours, self.pd.num_scenarios
+        for s in range(S):
+            for t in range(T):
+                for g in range(N):
+                    u, p = self._u_name(g, t), self._p_name(g, t, s)
+                    self.builder.add_constraint(
+                        {p: 1.0, u: -self.pd.p_max[g]}, "<=", 0.0,
+                        f"upper_s{s}_t{t}_g{g}"
+                    )
+                    self.builder.add_constraint(
+                        {p: -1.0, u: self.pd.p_min[g]}, "<=", 0.0,
+                        f"lower_s{s}_t{t}_g{g}"
+                    )
 
-    def _u_name(self, g: int, t: int) -> str:
-        return f"u_{g}_{t}"
-
-    def add_optimality_cut(self, u_bar: np.ndarray,
-                            per_scenario_theta: np.ndarray,
-                            per_scenario_cost: np.ndarray) -> None:
-        """
-        per_scenario_theta: (K, N, T) -- theta[h, g, t] from DispatchSubproblem
-        per_scenario_cost:  (K,)      -- Q_h(u_bar) from DispatchSubproblem
-
-        Implements eq. (2c):
-            Upsilon >= sum_h p_h [Q_h(u_bar) + sum_{g,t} theta_{g,t}(h) (u[g,t] - u_bar[g,t])]
-        Rearranged to standard "<=" form:
-            -Upsilon + sum_{g,t} T[g,t] * u[g,t] <= -RHS_const
-        where T[g,t] = sum_h p_h * theta[h,g,t]  (aggregated dual)
-        """
-        p = self.pd.scenario_probs
+    def setup_min_up_down_constraints(self):
         N, T = self.pd.num_gens, self.pd.num_hours
-
-        T_agg = np.tensordot(p, per_scenario_theta, axes=(0, 0))  # (N, T)
-        rhs_const = float(np.dot(p, per_scenario_cost)
-                           - sum(p[h] * np.sum(per_scenario_theta[h] * u_bar)
-                                 for h in range(len(p))))
-
-        coeffs = {"Upsilon": -1.0}
         for g in range(N):
             for t in range(T):
-                if T_agg[g, t] != 0.0:
-                    coeffs[self._u_name(g, t)] = T_agg[g, t]
+                u = self._u_name(g, t)
+                prev = self.pd.initial_status[g] if t == 0 else self._u_name(g, t - 1)
+                const = t == 0
 
-        self._cuts.append({"coeffs": coeffs, "rhs": -rhs_const})
+                for tau in range(t, min(t + self.pd.min_up[g], T)):
+                    ut = self._u_name(g, tau)
+                    coeffs = {u: 1.0, ut: -1.0}
+                    if not const:
+                        coeffs[prev] = -1.0
+                    self.builder.add_constraint(
+                        coeffs, "<=", float(prev) if const else 0.0,
+                        f"min_up_g{g}_t{t}_tau{tau}"
+                    )
 
-    def emit(self) -> MixedLBOProblem:
-        pd = self.pd
-        N, T = pd.num_gens, pd.num_hours
-        b = LBOBuilder()
+                for tau in range(t, min(t + self.pd.min_down[g], T)):
+                    ut = self._u_name(g, tau)
+                    coeffs = {u: 1.0, ut: -1.0}
+                    rhs = 1.0 - float(prev) if const else 1.0
+                    if not const:
+                        coeffs[prev] = 1.0
+                        coeffs[u] = -1.0
+                    self.builder.add_constraint(
+                        coeffs, "<=", rhs,
+                        f"min_down_g{g}_t{t}_tau{tau}"
+                    )
 
-        for g in range(N):
-            for t in range(T):
-                b.add_var(self._u_name(g, t), "B", 0, 1)
-        b.add_var("Upsilon", "C", 0, self.upsilon_upper)
-
-        for g in range(N):
-            for t in range(T):
-                b.add_objective_term(self._u_name(g, t), pd.c_fixed[g])
-        b.add_objective_term("Upsilon", 1.0)
-
-        # Minimum up/down time -- u[g,-1] = 0 assumed; tail window capped
-        # (not dropped) at T-1, matching the earlier corrected derivation.
-        for g in range(N):
-            Lu, Ld = int(pd.min_up[g]), int(pd.min_down[g])
-            for t in range(T):
-                u_t = self._u_name(g, t)
-                u_prev = self._u_name(g, t - 1) if t > 0 else None
-
-                up_end = min(t + Lu - 1, T - 1)
-                for tau in range(t, up_end + 1):
-                    # startup - u[tau] <= 0, startup = u[t] - u[prev]
-                    coeffs = {u_t: 1.0, self._u_name(g, tau): -1.0}
-                    if u_prev is not None:
-                        coeffs[u_prev] = coeffs.get(u_prev, 0.0) - 1.0
-                    b.add_constraint(coeffs, 0.0, label=f"minup_g{g}_t{t}_tau{tau}")
-
-                down_end = min(t + Ld - 1, T - 1)
-                for tau in range(t, down_end + 1):
-                    # shutdown - (1 - u[tau]) <= 0, shutdown = u[prev] - u[t]
-                    # => u[prev] - u[t] + u[tau] <= 1
-                    coeffs = {u_t: -1.0, self._u_name(g, tau): 1.0}
-                    if u_prev is not None:
-                        coeffs[u_prev] = coeffs.get(u_prev, 0.0) + 1.0
-                    b.add_constraint(coeffs, 1.0, label=f"mindown_g{g}_t{t}_tau{tau}")
-
-        for i, cut in enumerate(self._cuts):
-            b.add_constraint(cut["coeffs"], cut["rhs"], label=f"cut_{i}")
-
-        return b.build()
+    def setup_core_constraints(self):
+        self.setup_power_balance_constraints()
+        self.setup_generator_limit_constraints()
+        self.setup_min_up_down_constraints()
+        
+    # ----------------------------------------------------------------------
+    # Execution: Compile it into the Universal Math Object
+    # ----------------------------------------------------------------------
+    def get_base_model(self) -> MixedLBOProblem:
+        """Runs the setup and returns the compiled mathematical matrices."""
+        self.setup_variables()
+        self.setup_objective()
+        self.setup_core_constraints()
+        return self.builder.build()
 
 
 ############################################################################################
@@ -475,89 +459,113 @@ class BendersMasterBuilder:
 if __name__ == "__main__":
     import os
 
-    # Ensure log.txt appears in the exact folder where this script is located
-    script_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() else "."
+    pd = SUCProblemData.generate(
+        num_gens=4,
+        num_hours=24,
+        num_scenarios=3,
+        seed=2
+    )
+    print("PD------------", pd)
+
+    builder = SUCModelBuilder(pd)
+    print("BUILDER------------", builder)
+
+    # Build the ground mathematical model
+    model = builder.get_base_model()
+    print("MODEL------------", model)
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     log_path = os.path.join(script_dir, "4gen_suc_problem.txt")
 
-    # Instantiate Problem with 4-hour minimum up/down time parameter
-    problem = FourGeneratorUCModel(num_hours=24, num_scenarios=3, min_up_time=4, seed=42)
-    cqm = problem.get_cqm()
+    binary_vars = [v for v in model.variables if v.vtype == "B"]
+    continuous_vars = [v for v in model.variables if v.vtype == "C"]
 
-    binary_vars = [v for v in cqm.variables if cqm.vartype(v) == dimod.BINARY]
-    real_vars = [v for v in cqm.variables if cqm.vartype(v) == dimod.REAL]
-    num_constraints = len(cqm.constraints)
+    with open(log_path, "w", encoding="utf-8") as log:
+        def write(text=""):
+            log.write(text + "\n")
+        write("=" * 75)
+        write("       STOCHASTIC 4-GENERATOR UNIT COMMITMENT MODEL INSPECTION")
+        write("=" * 75)
+        write("\n1. MODEL DIMENSION & STRUCTURE")
+        write(f"  Problem Class:             Stochastic Unit Commitment MILP")
+        write(f"  Generators:                {pd.num_gens}")
+        write(f"  Hours:                     {pd.num_hours}")
+        write(f"  Scenarios:                 {pd.num_scenarios}")
+        write(f"  Total Variables:           {len(model.variables)}")
+        write(f"    Binary:                  {len(binary_vars)}")
+        write(f"    Continuous:              {len(continuous_vars)}")
+        write(f"  Total Constraints:         {len(model.constraints)}")
 
-    # 1. Write everything into log.txt
-    with open(log_path, "w", encoding="utf-8") as log_file:
-        
-        def log_write(text=""):
-            log_file.write(text + "\n")
+        write("\n2. GENERATOR PARAMETERS")
+        write(f"  {'Gen':<8} {'Fixed $/h':<12} {'Var $/MWh':<12} "
+              f"{'Pmin':<10} {'Pmax':<10} {'MinUp':<8} {'MinDown':<8} {'Initial':<8}")
 
-        log_write("==========================================================================")
-        log_write("         STOCHASTIC 4-GENERATOR UNIT COMMITMENT MODEL INSPECTION          ")
-        log_write("==========================================================================")
+        for g in range(pd.num_gens):
+            write(
+                f"  G{g:<7} "
+                f"{pd.c_fixed[g]:<12.1f} "
+                f"{pd.c_var[g]:<12.1f} "
+                f"{pd.p_min[g]:<10.1f} "
+                f"{pd.p_max[g]:<10.1f} "
+                f"{pd.min_up[g]:<8} "
+                f"{pd.min_down[g]:<8} "
+                f"{pd.initial_status[g]:<8}"
+            )
 
-        # General Overview
-        log_write("\n1. MODEL DIMENSION & STRUCTURE (With Min Up/Down Time)")
-        log_write(f"  -> Problem Class:                Mixed-Integer Linear Program (MILP / CQM)")
-        log_write(f"  -> Total Decision Variables:     {len(cqm.variables)}")
-        log_write(f"      * Binary Qubits (u_{{i,t}}):    {len(binary_vars)} (4 generators * 24 hours)")
-        log_write(f"      * Continuous MW (P_{{i,t}}):     {len(real_vars)} (4 generators * 24 hours)")
-        log_write(f"  -> Total Constraints:            {num_constraints}")
-        log_write(f"      * Coupling Limits (P_min/max): {4 * 24 * 2} constraints")
-        log_write(f"      * Power Balance (Scenarios):   {3 * 24} constraints (3 scenarios * 24 hours)")
+        write("\n3. SAMPLE SCENARIO DATA")
+        write(f"  {'Hour':<8} {'Demand':<12} {'Wind':<12} {'Net Demand':<12}")
 
-        # Generator Parameters
-        log_write("\n2. THERMAL GENERATOR PARAMETERS")
-        log_write(f"  {'Gen Name':<15} | {'Fixed Cost ($/hr)':<18} | {'Var Cost ($/MWh)':<16} | {'Min (MW)':<8} | {'Max (MW)':<8}")
-        log_write("  " + "-" * 75)
-        for i, gen in enumerate(problem.gen_names):
-            log_write(f"  {gen:<15} | ${problem.c_fixed[i]:<17.2f} | ${problem.c_var[i]:<15.2f} | {problem.p_min[i]:<8.1f} | {problem.p_max[i]:<8.1f}")
+        for t in [0, 6, 12, 18, 23]:
+            write(
+                f"  {t:<8} "
+                f"{pd.demand[0,t]:<12.2f} "
+                f"{pd.wind[0,t]:<12.2f} "
+                f"{pd.demand[0,t] - pd.wind[0,t]:<12.2f}"
+            )
 
-        # Stochastic Scenario Profiles Sample
-        log_write("\n3. STOCHASTIC SCENARIO PROFILES SAMPLE (Demand & Wind Power)")
-        log_write(f"  {'Hour':<6} | {'Scen 1 Dem (MW)':<16} | {'Scen 1 Wind (MW)':<17} | {'Scen 1 Net Dem (MW)':<20}")
-        log_write("  " + "-" * 68)
-        sample_hours = [0, 6, 12, 18, 23]
-        for t in sample_hours:
-            dem = problem.demand[0, t]
-            wnd = problem.wind[0, t]
-            net_dem = dem - wnd
-            log_write(f"  {t:<6} | {dem:<16.2f} | {wnd:<17.2f} | {net_dem:<20.2f}")
+        write("\n4. SAMPLE VARIABLES")
 
-        # Sample Variable Names
-        log_write("\n4. SAMPLE DECISION VARIABLES (Registered in CQM)")
-        log_write("  -> Binary Qubit Variables (Stage 1):")
-        log_write(f"       {binary_vars[:4]}")
-        log_write("  -> Continuous Dispatch Variables (Stage 2):")
-        log_write(f"       {real_vars[:4]}")
+        write("  Binary:")
+        for v in binary_vars[:6]:
+            write(f"    {v.name}: {v.vtype} [{v.lower}, {v.upper}]")
 
-        # Complete Master Equation (Objective Function)
-        log_write("\n5. MASTER OBJECTIVE FUNCTION (Total Production & Startup Cost)")
-        log_write(f"   {cqm.objective}")
+        write("  Continuous:")
+        for v in continuous_vars[:6]:
+            write(f"    {v.name}: {v.vtype} [{v.lower}, {v.upper}]")
 
-        # Complete List of All Constraints
-        log_write(f"\n6. ALL REGISTERED CONSTRAINTS ({num_constraints} Total)")
-        log_write("  " + "-" * 75)
-        for label, constraint in cqm.constraints.items():
-            log_write(f"  [Label]: {label}")
-            log_write(f"  [Rule]:  {constraint.to_polystring()}")
-            log_write("  " + "-" * 40)
+        write("\n5. OBJECTIVE FUNCTION")
 
-        log_write("\n==========================================================================")
-        log_write("                MODEL BLUEPRINT CREATED SUCCESSFULLY                      ")
-        log_write("==========================================================================")
+        write(f"  Sense: {model.objective.sense}")
+        write(f"  Constant: {model.objective.constant}")
+        write(f"  Number of objective terms: "
+              f"{len(model.objective.coefficients)}")
 
-    # 2. Print Clean Overview to Terminal (No Truncation)
-    print("==========================================================================")
-    print("         STOCHASTIC 4-GENERATOR UNIT COMMITMENT MODEL INSPECTION          ")
-    print("==========================================================================")
-    print(f"\n[INFO] Complete details and all {num_constraints} constraints written successfully!")
-    print(f"       Log file location: {os.path.abspath(log_path)}")
-    print("\n--- MODEL OVERVIEW SUMMARY ---")
-    print(f"  -> Problem Class:               Mixed-Integer Linear Program (MILP / CQM)")
-    print(f"  -> Total Decision Variables:    {len(cqm.variables)} ({len(binary_vars)} binary, {len(real_vars)} continuous)")
-    print(f"  -> Total Constraints Logged:    {num_constraints}")
-    print("\==========================================================================")
-    print("                CONSOLE SUMMARY COMPLETED SUCCESSFULLY                    ")
-    print("==========================================================================")
+        for idx, coeff in list(model.objective.coefficients.items())[:15]:
+            write(f"    {coeff:+.3f} * {model.variables[idx].name}")
+
+        write("\n6. CONSTRAINTS")
+
+        for constraint in model.constraints:
+            terms = " ".join(
+                f"{coef:+g}*{model.variables[idx].name}"
+                for idx, coef in constraint.coefficients.items()
+            )
+
+            write(
+                f"  [{constraint.name}] "
+                f"{terms} {constraint.sense} {constraint.rhs}"
+            )
+
+        write("\n" + "=" * 75)
+        write("                 MODEL BLUEPRINT CREATED")
+        write("=" * 75)
+
+    print("=" * 75)
+    print("       STOCHASTIC 4-GENERATOR UNIT COMMITMENT MODEL INSPECTION")
+    print("=" * 75)
+    print(f"\nVariables:    {len(model.variables)}")
+    print(f"  Binary:     {len(binary_vars)}")
+    print(f"  Continuous: {len(continuous_vars)}")
+    print(f"Constraints:  {len(model.constraints)}")
+    print(f"\nLog written to:")
+    print(os.path.abspath(log_path))
