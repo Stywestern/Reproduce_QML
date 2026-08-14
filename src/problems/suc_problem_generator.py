@@ -8,37 +8,6 @@ from dataclasses import dataclass, field
 import numpy as np
 import scipy.sparse as sp
 
-"""
-Modular pipeline for reproducing "Qubit-Efficient Quantum Annealing for
-Stochastic Unit Commitment" (Hong, Xu, Teng, IEEE TPWRS 2026).
-
-Core idea: every algorithm in the paper (classical MILP, Basic QA, QPHR-ALM,
-QPHR-ADMM) ultimately wants the SAME thing -- a compact standard-form LP/MIP,
-min c^T x s.t. A x <= b, with typed/bounded variables -- and differs only in
-what PREPROCESSING it applies before solving:
-
-    build master (SUCProblemData -> MixedLBOProblem)
-            |
-            +-- classical MILP: use as-is (mixed binary/continuous)
-            |
-            +-- QUBO-based (Basic QA / QPHR-ALM / D-ADMM):
-                    binary_encode_continuous(Upsilon)  -> all-binary problem
-                    [Basic QA only: also add_binary_slacks() per constraint]
-                    -> algorithm-specific QUBO construction (separate module,
-                       not yet implemented)
-
-Layers:
-    SUCProblemData        -- scalable technical + scenario data (N, T, K free)
-    DispatchSubproblem     -- per-scenario continuous LP given fixed u;
-                              returns cost + duals (Benders cut ingredients)
-    LBOBuilder / MixedLBOProblem -- generic (c, A, b) representation + builder
-    binary_encode_continuous     -- generic preprocessing transform
-    BendersMasterBuilder    -- SUC-specific: emits the master as a MixedLBOProblem
-    MasterSolver (ABC)       -- common interface every backend implements
-        ClassicalMILPSolver  -- fully implemented, scipy.optimize.milp
-        (QUBO-based backends: next step, see chat)
-"""
-
 # ###########################################################################################################################################
 # 1. Problem data -- fully parameterized so S/T/K can all be changed. One can even add more parameters with some work.
 # ###########################################################################################################################################
@@ -66,7 +35,7 @@ class SUCProblemData:
             assert np.all(self.p_min <= self.p_max), "p_min must be <= p_max for every generator"
             assert self.c_var.shape == (N,) and self.c_fixed.shape == (N,)
             assert self.min_up.shape == (N,) and self.min_down.shape == (N,)
-            assert np.all(self.min_up >= 1) and np.all(self.min_down >= 1)
+            assert np.all(self.min_up >= 0) and np.all(self.min_down >= 0)
             assert self.initial_status.shape == (N,)
             assert np.all(np.isin(self.initial_status, [0, 1]))
             assert self.scenario_probs.shape == (S,)
@@ -389,7 +358,7 @@ class SUCModelBuilder:
                 coeffs = {self._shed_name(t, s): 1.0}
                 for g in range(N):
                     coeffs[self._p_name(g, t, s)] = 1.0
-                self.builder.add_constraint(coeffs, sense="=", rhs=net_demand, label=f"balance_s{s}_t{t}")
+                self.builder.add_constraint(coeffs, rhs=net_demand, sense="=", label=f"balance_s{s}_t{t}")
 
     
     def setup_generator_limit_constraints(self):
@@ -399,12 +368,12 @@ class SUCModelBuilder:
                 for g in range(N):
                     u, p = self._u_name(g, t), self._p_name(g, t, s)
                     self.builder.add_constraint(
-                        {p: 1.0, u: -self.pd.p_max[g]}, "<=", 0.0,
-                        f"upper_s{s}_t{t}_g{g}"
+                        {p: 1.0, u: -self.pd.p_max[g]}, rhs=0.0, sense="<=",
+                        label=f"upper_s{s}_t{t}_g{g}"
                     )
                     self.builder.add_constraint(
-                        {p: -1.0, u: self.pd.p_min[g]}, "<=", 0.0,
-                        f"lower_s{s}_t{t}_g{g}"
+                        {p: -1.0, u: self.pd.p_min[g]}, rhs=0.0, sense="<=",
+                        label=f"lower_s{s}_t{t}_g{g}"
                     )
 
     def setup_min_up_down_constraints(self):
@@ -415,26 +384,32 @@ class SUCModelBuilder:
                 prev = self.pd.initial_status[g] if t == 0 else self._u_name(g, t - 1)
                 const = t == 0
 
-                for tau in range(t, min(t + self.pd.min_up[g], T)):
+                # Min Up: u_t - u_{t-1} - u_tau <= 0
+                for tau in range(t + 1, min(t + self.pd.min_up[g], T)):
                     ut = self._u_name(g, tau)
                     coeffs = {u: 1.0, ut: -1.0}
                     if not const:
                         coeffs[prev] = -1.0
+                    
                     self.builder.add_constraint(
-                        coeffs, "<=", float(prev) if const else 0.0,
-                        f"min_up_g{g}_t{t}_tau{tau}"
+                        coeffs, 
+                        rhs=float(prev) if const else 0.0, 
+                        sense="<=",
+                        label=f"min_up_g{g}_t{t}_tau{tau}"
                     )
 
-                for tau in range(t, min(t + self.pd.min_down[g], T)):
+                # Min Down: u_{t-1} - u_t + u_tau <= 1
+                for tau in range(t + 1, min(t + self.pd.min_down[g], T)):
                     ut = self._u_name(g, tau)
-                    coeffs = {u: 1.0, ut: -1.0}
-                    rhs = 1.0 - float(prev) if const else 1.0
+                    coeffs = {u: -1.0, ut: 1.0}
                     if not const:
                         coeffs[prev] = 1.0
-                        coeffs[u] = -1.0
+                        
                     self.builder.add_constraint(
-                        coeffs, "<=", rhs,
-                        f"min_down_g{g}_t{t}_tau{tau}"
+                        coeffs, 
+                        rhs=1.0 - float(prev) if const else 1.0, 
+                        sense="<=",
+                        label=f"min_down_g{g}_t{t}_tau{tau}"
                     )
 
     def setup_core_constraints(self):
@@ -465,14 +440,11 @@ if __name__ == "__main__":
         num_scenarios=3,
         seed=2
     )
-    print("PD------------", pd)
 
     builder = SUCModelBuilder(pd)
-    print("BUILDER------------", builder)
 
     # Build the ground mathematical model
     model = builder.get_base_model()
-    print("MODEL------------", model)
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     log_path = os.path.join(script_dir, "4gen_suc_problem.txt")
