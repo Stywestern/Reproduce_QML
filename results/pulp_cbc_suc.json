@@ -1,6 +1,6 @@
 {
     "metadata": {
-        "timestamp_utc": "2026-08-14T11:08:28.096363+00:00",
+        "timestamp_utc": "2026-08-17T07:09:00.371972+00:00",
         "experiment_name": "4-Generator Stochastic Unit Commitment",
         "solver_name": "PuLP CBC (Classical Ground Truth)",
         "seed_used": 2
@@ -8,7 +8,7 @@
     "core_required_metrics": {
         "found_solution": true,
         "cost_of_solution": 143935.91,
-        "time_it_took_seconds": 0.4836,
+        "time_it_took_seconds": 0.9924,
         "converged": true
     },
     "extended_solver_metrics": {
@@ -18,7 +18,7 @@
         "total_variables_count": 456,
         "binary_variables_count": 96,
         "continuous_variables_count": 360,
-        "total_constraints_count": 1760,
+        "total_constraints_count": 784,
         "total_search_space_formula": "2^96"
     },
     "solution_details": {
@@ -128,6 +128,11 @@
                 0,
                 0
             ]
+        },
+        "cost_by_scenario": {
+            "scenario_0": 41497.06,
+            "scenario_1": 41234.5,
+            "scenario_2": 41514.35
         }
     }
 }
