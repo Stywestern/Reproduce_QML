@@ -99,6 +99,7 @@ if __name__ == "__main__":
         c_fixed=np.array([300.0, 290.0, 280.0, 270.0]),
         min_up=np.array([10, 8, 8, 6]),
         min_down=np.array([10, 8, 8, 6]),
+        scenario_probs=np.array([0.2, 0.5, 0.3]),
         demand=custom_demand,
         wind=custom_wind
     )
@@ -199,24 +200,37 @@ if __name__ == "__main__":
         print("-" * 50)
         print(f"  -> Total Computed Cost:      ${(fixed_cost + dispatch_cost + shed_cost):,.2f}")
 
-        # --- Cost breakdown by scenario, using the scenario tags on MILPModel ---
-        # Fixed commitment cost isn't scenario-specific (u is first-stage), so it's
-        # reported separately; this is the number a Benders/ADMM subproblem solve
-        # for scenario s should reproduce for its own block.
+        # --- Cost breakdown by scenario ---
         print(f"\n[6. Cost by Scenario]  (dispatch + shed only -- fixed cost is first-stage, shown above)")
         for s in range(num_scenarios):
-            s_cost = 0.0
+            weighted_cost = 0.0
+
             for i in base_model.scenario_vars(s):
                 coeff = float(base_model.c[i])
-                if coeff == 0:
-                    continue
-                val = pulp_vars[base_model.var_names[i]].varValue
-                s_cost += coeff * (val if val is not None else 0.0)
-            cost_by_scenario[f"scenario_{s}"] = round(s_cost, 2)
-            print(f"  -> Scenario {s}:              ${s_cost:,.2f}")
+                val = pulp_vars[base_model.var_names[i]].varValue or 0.0
+                weighted_cost += coeff * val
+
+            prob = pd.scenario_probs[s]
+            raw_cost = weighted_cost / prob if prob > 0 else 0.0
+            cost_by_scenario[f"scenario_{s}"] = round(raw_cost, 2)
+
+            print(
+                f"  -> Scenario {s}: "
+                f"P={prob:.3f}, "
+                f"Raw=${raw_cost:,.2f}, "
+                f"Weighted=${weighted_cost:,.2f}"
+            )
+
         print("-" * 50)
-        print(f"  -> Sum of scenario costs:    ${sum(cost_by_scenario.values()):,.2f}  "
-              f"(should equal Dispatch + Shed above)")
+        weighted_scenario_cost = sum(cost_by_scenario.values()) / num_scenarios
+        expected_recourse_cost = sum(
+            pd.scenario_probs[s] * cost_by_scenario[f"scenario_{s}"]
+            for s in range(num_scenarios)
+        )
+
+        expected_total_cost = fixed_cost + expected_recourse_cost
+        print(f"  -> Expected Recourse Cost:          ${weighted_scenario_cost:,.2f}")
+        print(f"  -> Expected Total Cost:             ${expected_total_cost:,.2f}")
 
     results_payload = {
         "metadata": {
