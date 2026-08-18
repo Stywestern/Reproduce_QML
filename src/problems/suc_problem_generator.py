@@ -213,20 +213,27 @@ class MILPBuilder:
     subproblem.
     """
     def __init__(self):
-        self._names: list[str] = []
-        self._types: list[str] = []
-        self._lower: list[float] = []
-        self._upper: list[float] = []
-        self._var_scenario: list[int] = []
-        self._index: dict[str, int] = {}
-        self._obj: dict[int, float] = {}
-        self._rows_i: list[int] = []
-        self._rows_j: list[int] = []
-        self._rows_v: list[float] = []
-        self._row_lower: list[float] = []
-        self._row_upper: list[float] = []
-        self._row_labels: list[str] = []
-        self._row_scenario: list[int] = []
+        # Variable definitions (columns)
+        self._names: list[str] = []          # String identifiers for each variable
+        self._types: list[str] = []          # Variable type: 'B' (Binary) or 'C' (Continuous)
+        self._lower: list[float] = []        # Lower bound limits for variables
+        self._upper: list[float] = []        
+        self._var_scenario: list[int] = []   # -1 for first-stage/shared variables, or scenario integer index
+        self._index: dict[str, int] = {}     # Maps variable string name to its column integer index
+        
+        # Objective function
+        self._obj: dict[int, float] = {}     # Maps variable column index to its objective function coefficient
+
+        # Constraint matrix (Coordinate List / COO sparse matrix format), like row_ij = v
+        self._rows_i: list[int] = []         # Row indices for non-zero constraint coefficients
+        self._rows_j: list[int] = []         # Column indices (variable IDs) for non-zero constraint coefficients
+        self._rows_v: list[float] = []       # The actual non-zero coefficient values (multiplier)
+
+        # Constraint definitions (rows)
+        self._row_lower: list[float] = []    # Constraint lower bounds (RHS for >= and ==; -inf for <=)
+        self._row_upper: list[float] = []    
+        self._row_labels: list[str] = []     # String identifiers for each constraint row
+        self._row_scenario: list[int] = []   # -1 for shared constraints, or scenario integer index
  
     def add_var(self, name: str, vtype: str, lower: float = 0.0, upper: float = 1.0,
                 scenario: int | None = None):

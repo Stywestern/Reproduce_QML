@@ -1,19 +1,6 @@
-"""
-Classical Benders master problem for the SUC MILP, eqs. (2a)-(2f) of
-Hong, Xu & Teng (arXiv:2502.15917). Solved with CBC for now.
-
-Style: no function definitions except storage classes. Every step runs
-top to bottom, in the order the paper presents it.
-
-Structure worth noting: the master is assembled as its own MILPModel
-FIRST (reusing MILPBuilder from suc_model.py), and only the very last
-section translates that into pulp and solves it. That split is
-deliberate -- when PHR-ALM replaces CBC with a QUBO/QPU solve, the
-assembly section above stays untouched; only the final translate+solve
-block gets replaced with one that reads the same MILPModel (its rows
-are already in exactly the g_i(x) <= 0 form eq. (10) needs) and builds
-a penalty-augmented QUBO instead of pulp constraints.
-"""
+# ###########################################################################################################################################
+# Imports
+# ###########################################################################################################################################
 
 from __future__ import annotations
 from dataclasses import dataclass
@@ -33,26 +20,9 @@ def print_timed(*args, **kwargs):
 
 from src.problems.suc_problem_generator import SUCProblemData, SUCModelBuilder, MILPModel, MILPBuilder
 
-@dataclass
-class BendersCut:
-    """
-    One aggregated multi-scenario optimality cut, eq. (2c), rearranged into
-
-        Upsilon - sum_g,t theta[u_name] * u[u_name]  >=  rhs
-
-    theta and rhs are already the SUM over scenarios h (each subproblem's
-    dual/cost is pi(xi_h)-weighted internally) -- one aggregated cut per
-    BD iteration, not one cut per scenario.
-    """
-    theta: dict[str, float]   # u-variable name -> aggregated dual
-    rhs: float                # aggregate_subproblem_cost - sum(theta * u_l)
-    iteration: int            # which BD iteration l produced this cut
-
-
-
-# ============================================================================
-# Build the SUC problem once -- shared by every master/subproblem below.
-# ============================================================================
+# ###########################################################################################################################################
+# 1. Generate the problem from data provided
+# ###########################################################################################################################################
 num_hours = 24
 num_scenarios = 3
 seed = 2
@@ -79,8 +49,8 @@ pd = SUCProblemData.generate(
     seed=seed,
     p_max=np.array([100.0, 95.0, 80.0, 75.0]),
     p_min=np.array([40.0, 35.0, 30.0, 25.0]),
-    c_var=np.array([25.0, 26.0, 27.0, 28.0]),
-    c_fixed=np.array([300.0, 290.0, 280.0, 270.0]),
+    c_var=np.array([25.0, 30.0, 40.0, 60.0]),
+    c_fixed=np.array([300.0, 240.0, 200.0, 180.0]),
     min_up=np.array([10, 8, 8, 6]),
     min_down=np.array([10, 8, 8, 6]),
     scenario_probs=np.array([0.2, 0.5, 0.3]),
@@ -88,18 +58,45 @@ pd = SUCProblemData.generate(
     wind=custom_wind
 )
 
+# We need to construct this model so that we can get appropriate variables, because then we will create another MILP model to seperate Master problem and Subproblem
 model = SUCModelBuilder(pd).get_base_model()
- 
-first_stage_names = set(model.var_names[i] for i in model.first_stage_vars())
-u_fixed_prefix = "ufix__"
- 
-# ============================================================================
-# Benders loop
-# ============================================================================
- 
+first_stage_names = set(model.var_names[i] for i in model.first_stage_vars()) # This is a list of strings that hold u_i_t vars, 96 of them
+u_fixed_prefix = "ufix_"
+
+# ###########################################################################################################################################
+# Helper Functions and Classes For The Loop
+# ###########################################################################################################################################
+
+@dataclass
+class BendersCut:
+    """
+    One aggregated multi-scenario optimality cut, eq. (2c), rearranged into
+
+        Upsilon - sum_g,t theta[u_name] * u[u_name]  >=  rhs
+
+    theta and rhs are already the SUM over scenarios h (each subproblem's
+    dual/cost is pi(xi_h)-weighted internally) -- one aggregated cut per
+    BD iteration, not one cut per scenario.
+    """
+    theta: dict[str, float]   # u-variable name -> aggregated dual
+    rhs: float                # aggregate_subproblem_cost - sum(theta * u_l)
+    iteration: int            # which BD iteration l produced this cut
+
+
+
+
+
+
+
+
+
+ # ###########################################################################################################################################
+# Main While Loop
+# ###########################################################################################################################################
+
 cuts: list[BendersCut] = []
-upsilon_lower = 0.0
-max_iterations = 100
+upsilon_lower = -np.inf
+max_iterations = 10
 gap_tolerance = 1e-4
  
 lower_bound = -np.inf
@@ -116,10 +113,11 @@ pbar_outer = tqdm(
 iteration_history = []
 while iteration < max_iterations:
     iteration_start = time.perf_counter()
+
     # ------------------------------------------------------------------
-    # Master: assemble as its own MILPModel (unchanged from step 1)
+    # SECTION I: Assemble Master
     # ------------------------------------------------------------------
-    master_builder = MILPBuilder()
+    master_builder = MILPBuilder() # completely empty MILP building class, then we add vars
  
     for i in model.first_stage_vars():
         name = model.var_names[i]
@@ -129,25 +127,45 @@ while iteration < max_iterations:
  
     master_builder.add_var("Upsilon", "C", upsilon_lower, np.inf)
     master_builder.add_obj("Upsilon", 1.0)
- 
+
     for r in model.shared_rows():
         row = model.A.getrow(r)
         terms = {model.var_names[j]: float(v) for j, v in zip(row.indices, row.data)}
         sense, rhs = model.row_sense_rhs(r)
         master_builder.add_row(terms, sense, rhs, model.constraint_labels[r])
- 
+
     for cut in cuts:
+        print("Cut", cut)
         terms = {name: -theta for name, theta in cut.theta.items()}
+        print("Terms", terms)
+
         terms["Upsilon"] = 1.0
         master_builder.add_row(terms, ">=", cut.rhs, f"benders_cut_l{cut.iteration}")
+
+    print(f"self._names: {master_builder._names}")
+    print(f"self._types: {master_builder._types}")
+    print(f"self._var_scenario: {master_builder._var_scenario}")
+    print(f"self._index: {master_builder._index}")
+    print(f"self._obj: {master_builder._obj}")
+    print(f"self._rows_i: {master_builder._rows_i}")
+    print(f"self._rows_j: {master_builder._rows_j}")
+    print(f"self._rows_v: {master_builder._rows_v}")
+    print(f"self._row_lower: {master_builder._row_lower}")
+    print(f"self._row_upper: {master_builder._row_upper}")
+    print(f"self._row_labels: {master_builder._row_labels}")
+    print(f"self._row_scenario: {master_builder._row_scenario}")    
+
+    print("##############################################################################")    
  
     master_model = master_builder.build()
- 
+
+    break
+
+    """
     # ------------------------------------------------------------------
-    # Master: translate + solve -- the pulp-specific section that step 2
-    # replaces with a QUBO build + sampler call, reading the same
-    # master_model produced above.
+    # SECTION II: Translate Master to PulP and Solve
     # ------------------------------------------------------------------
+
     master_prob = pulp.LpProblem(f"Benders_Master_k{iteration}", pulp.LpMinimize)
  
     master_pulp_vars: dict[str, pulp.LpVariable] = {}
@@ -184,16 +202,13 @@ while iteration < max_iterations:
     master_status = pulp.LpStatus[master_status_code]
     print_timed("Master solving complete")
     master_time = time.perf_counter() - master_start
-    print_timed(
-        f"Master Upsilon it{iteration}: "
-        f"{master_pulp_vars['Upsilon'].varValue}"
-    )
  
     u_values = {
         name: int(round(var.varValue))
         for name, var in master_pulp_vars.items()
         if name != "Upsilon"
     }
+    
     fixed_cost = sum(
         float(model.c[i]) * u_values[model.var_names[i]]
         for i in model.first_stage_vars()
@@ -289,6 +304,13 @@ while iteration < max_iterations:
         for i in model.first_stage_vars():
             name = model.var_names[i]
             theta_agg[name] += probs * sub_pulp_constraints[f"fix_{name}"].pi
+
+            pi = sub_pulp_constraints[f"fix_{name}"].pi
+            print_timed(
+                f"s={scenario}, {name}: "
+                f"u={u_values[name]}, "
+                f"pi={pi}"
+            )
     
     subproblem_time = time.perf_counter() - subproblem_start
 
@@ -300,15 +322,14 @@ while iteration < max_iterations:
 
     cuts_before = len(cuts)
     cuts.append(BendersCut(theta=dict(theta_agg), rhs=rhs, iteration=iteration))
-    print_timed(f"theta range it{iteration}: "
-            f"[{min(theta_agg.values()):.4f}, {max(theta_agg.values()):.4f}]")
-    print_timed(f"cut rhs it{iteration}: {rhs:.4f}")
-
-    cut_value_at_current_u = (
-        rhs
-        + sum(theta_agg[name] * u_values[name] for name in theta_agg)
-    )
+    cut_value_at_current_u = (rhs + sum(theta_agg[name] * u_values[name] for name in theta_agg))
     cut_tightness_error = cut_value_at_current_u - expected_recourse_cost
+
+    print_timed(
+            f"CHECK cut@u={cut_value_at_current_u:.6f}, "
+            f"Q(u)={expected_recourse_cost:.6f}, "
+            f"error={cut_tightness_error:.6e}"
+        )
 
     candidate_upper_bound = fixed_cost + expected_recourse_cost
     if candidate_upper_bound < upper_bound:
@@ -406,6 +427,8 @@ final_gap = (
     else None
 )
 
+print("Cuts made during iterations:", cuts)
+
 print("\n[Results Summary]")
 print(f"  -> Solver Status:        {'Converged' if converged else 'Stopped'}")
 print(f"  -> Found Solution?       {found_solution}")
@@ -444,9 +467,9 @@ results_payload = {
         "seed_used": int(seed),
     },
     "core_required_metrics": {
-        "found_solution": found_solution,
+        "found_solution": int(found_solution),
         "cost_of_solution": cost_of_solution,
-        "converged": converged,
+        "converged": int(converged),
         "final_lower_bound": (
             float(lower_bound)
             if np.isfinite(lower_bound)
@@ -471,3 +494,4 @@ with open(json_path, "w", encoding="utf-8") as f:
 
 print(f"\n[SUCCESS] Comprehensive JSON logged to: '{json_path}'")
 print("==========================================================================\n")
+"""
