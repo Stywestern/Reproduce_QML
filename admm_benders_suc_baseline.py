@@ -19,49 +19,20 @@ def print_timed(*args, **kwargs):
     print(timestamp, *args, **kwargs)
 
 from src.problems.suc_problem_generator import SUCProblemData, SUCModelBuilder, MILPModel, MILPBuilder
+from src.problems.generated_problems import g4t24s3_suc_problem, tiny_suc_problem
 
 # ###########################################################################################################################################
-# 1. Generate the problem from data provided
+# 1. Load the problem
 # ###########################################################################################################################################
-num_hours = 24
-num_scenarios = 3
-seed = 2
- 
-print("\n[1. Instantiating Problem Blueprint]")
-rng = np.random.default_rng(seed)
-t = np.arange(num_hours)
-
-base_demand = 220 + 90 * np.sin((t - 6) * np.pi / 12)
-custom_demand = np.array([
-    base_demand + rng.normal(0, 10, num_hours)
-    for _ in range(num_scenarios)
-])
-
-custom_wind = np.array([
-    np.clip(rng.normal(20, 15, num_hours), 0, 40)
-    for _ in range(num_scenarios)
-])
-
-pd = SUCProblemData.generate(
-    num_gens=4,
-    num_hours=num_hours,
-    num_scenarios=num_scenarios,
-    seed=seed,
-    p_max=np.array([100.0, 95.0, 80.0, 75.0]),
-    p_min=np.array([40.0, 35.0, 30.0, 25.0]),
-    c_var=np.array([25.0, 30.0, 40.0, 60.0]),
-    c_fixed=np.array([300.0, 240.0, 200.0, 180.0]),
-    min_up=np.array([10, 8, 8, 6]),
-    min_down=np.array([10, 8, 8, 6]),
-    scenario_probs=np.array([0.2, 0.5, 0.3]),
-    demand=custom_demand,
-    wind=custom_wind
-)
 
 # We need to construct this model so that we can get appropriate variables, because then we will create another MILP model to seperate Master problem and Subproblem
+seed = 2
+#pd = g4t24s3_suc_problem(seed)
+pd = tiny_suc_problem(seed)
 model = SUCModelBuilder(pd).get_base_model()
 first_stage_names = set(model.var_names[i] for i in model.first_stage_vars()) # This is a list of strings that hold u_i_t vars, 96 of them
-u_fixed_prefix = "ufix_"
+
+print_timed("Done")
 
 # ###########################################################################################################################################
 # Helper Functions and Classes For The Loop
@@ -70,272 +41,258 @@ u_fixed_prefix = "ufix_"
 @dataclass
 class BendersCut:
     """
-    One aggregated multi-scenario optimality cut, eq. (2c), rearranged into
+    Scenario-specific Benders optimality cut.
 
-        Upsilon - sum_g,t theta[u_name] * u[u_name]  >=  rhs
-
-    theta and rhs are already the SUM over scenarios h (each subproblem's
-    dual/cost is pi(xi_h)-weighted internally) -- one aggregated cut per
-    BD iteration, not one cut per scenario.
+    Upsilon_s - theta_s^T u >= rhs_s
     """
     theta: dict[str, float]   # u-variable name -> aggregated dual
     rhs: float                # aggregate_subproblem_cost - sum(theta * u_l)
     iteration: int            # which BD iteration l produced this cut
+    scenario: int             # which scenario this cut belongs to
 
+dummy_cut = BendersCut({"u_gen3_hr1": 2718.28, "u_gen3_hr2": 3141.59}, 2023, -1, -1)
 
+# ############################################################################################################################################
+# Math Model Instantiations
+# ############################################################################################################################################
 
+# ============================================================================
+# Pre-build Master
+# ============================================================================
 
+print_timed("[2. Instantiating Mathematical Model]")
 
+upsilon_lower = 0
 
+master_builder = MILPBuilder()
+master_prob = pulp.LpProblem("Benders_Master", pulp.LpMinimize)
+master_pulp_vars: dict[str, pulp.LpVariable] = {}
 
+# Add variables to both the builder and PuLP
+for i in model.first_stage_vars():
+    name = model.var_names[i]
+    master_builder.add_var(name, "B", 0.0, 1.0)
+    
+    master_pulp_vars[name] = pulp.LpVariable(name, lowBound=0.0, upBound=1.0, cat=pulp.LpBinary)
+    
+    if model.c[i] != 0:
+        master_builder.add_obj(name, float(model.c[i]))
 
+# Add Upsilon
+upsilon_names = [f"Upsilon_s{s}" for s in range(pd.num_scenarios)]
 
- # ###########################################################################################################################################
+for uname in upsilon_names:
+    master_builder.add_var(uname, "C", upsilon_lower, np.inf)
+    master_builder.add_obj(uname, 1.0)
+    master_pulp_vars[uname] = pulp.LpVariable(uname, lowBound=upsilon_lower, cat=pulp.LpContinuous)
+
+master_prob += pulp.lpSum(float(model.c[i]) * master_pulp_vars[model.var_names[i]] for i in model.first_stage_vars() if model.c[i] != 0
+) + pulp.lpSum(master_pulp_vars[uname] for uname in upsilon_names)
+
+# Add shared constraints to both
+for r in model.shared_rows():
+    row = model.A.getrow(r)
+    terms_dict = {model.var_names[j]: float(v) for j, v in zip(row.indices, row.data)}
+    sense, rhs = model.row_sense_rhs(r)
+    
+    master_builder.add_row(terms_dict, sense, rhs, model.constraint_labels[r])
+    
+    # Translate to PuLP expression
+    expr = pulp.lpSum(coeff * master_pulp_vars[name] for name, coeff in terms_dict.items())
+    label = model.constraint_labels[r]
+    
+    if sense == "=":
+        master_prob += (expr == rhs, label)
+    elif sense == "<=":
+        master_prob += (expr <= rhs, label)
+    else:
+        master_prob += (expr >= rhs, label)
+
+master_model = master_builder.build()
+
+# ============================================================================
+# Pre-build Base Subproblems
+# ============================================================================
+u_fixed_prefix = "ufix_"
+base_sub_probs: list[pulp.LpProblem] = []
+base_sub_vars: list[dict[str, pulp.LpVariable]] = []
+
+for scenario in range(pd.num_scenarios):
+    sub_prob = pulp.LpProblem(f"Benders_Base_Subproblem_s{scenario}", pulp.LpMinimize)
+    sub_pulp_vars: dict[str, pulp.LpVariable] = {}
+    
+    # 1. Add continuous second-stage operational variables
+    for i in model.scenario_vars(scenario):
+        name = model.var_names[i]
+        lb = None if model.lower[i] == -np.inf else float(model.lower[i])
+        ub = None if model.upper[i] == np.inf else float(model.upper[i])
+        sub_pulp_vars[name] = pulp.LpVariable(name, lowBound=lb, upBound=ub, cat=pulp.LpContinuous)
+        
+    # 2. Add continuous proxy variables for the first-stage commitments
+    for i in model.first_stage_vars():
+        name = model.var_names[i]
+        proxy_name = u_fixed_prefix + name
+        sub_pulp_vars[proxy_name] = pulp.LpVariable(proxy_name, lowBound=0.0, upBound=1.0, cat=pulp.LpContinuous)
+        
+    # 3. Add scenario objective
+    sub_prob += pulp.lpSum(
+        float(model.c[i]) * sub_pulp_vars[model.var_names[i]]
+        for i in model.scenario_vars(scenario)
+        if model.c[i] != 0
+    )
+    
+    # 4. Add physical scenario constraints (load, limits, etc.)
+    for r in model.scenario_rows(scenario):
+        row = model.A.getrow(r)
+        
+        # Map variables: use proxy name if it's a stage-1 variable, otherwise use standard name
+        expr = pulp.lpSum(
+            float(v) * sub_pulp_vars[
+                u_fixed_prefix + model.var_names[j] if model.var_names[j] in first_stage_names else model.var_names[j]
+            ]
+            for j, v in zip(row.indices, row.data)
+        )
+        
+        sense, rhs = model.row_sense_rhs(r)
+        label = model.constraint_labels[r]
+        
+        if sense == "=":
+            sub_prob += (expr == rhs, label)
+        elif sense == "<=":
+            sub_prob += (expr <= rhs, label)
+        else:
+            sub_prob += (expr >= rhs, label)
+            
+    # Store the base problem and variables. We don't add fixing constraints yet, because PuLP can't handle them
+    base_sub_probs.append(sub_prob)
+    base_sub_vars.append(sub_pulp_vars)
+
+print_timed("Done")
+
+# ############################################################################################################################################
 # Main While Loop
-# ###########################################################################################################################################
+# ############################################################################################################################################
+
+max_iterations = 100
+gap_tolerance = 1e-4
+lbs = []
+ubs = []
 
 cuts: list[BendersCut] = []
-upsilon_lower = -np.inf
-max_iterations = 10
-gap_tolerance = 1e-4
  
 lower_bound = -np.inf
 upper_bound = np.inf
 best_u = None
 iteration = 0
 
-pbar_outer = tqdm(
-    total=max_iterations,
-    desc="Benders",
-    unit="iter"
-)
+pbar_outer = tqdm(total=max_iterations, desc="Benders", unit="iter")
 
 iteration_history = []
 while iteration < max_iterations:
     iteration_start = time.perf_counter()
 
     # ------------------------------------------------------------------
-    # SECTION I: Assemble Master
+    # SECTION I: Add cuts to the master
     # ------------------------------------------------------------------
-    master_builder = MILPBuilder() # completely empty MILP building class, then we add vars
- 
-    for i in model.first_stage_vars():
-        name = model.var_names[i]
-        master_builder.add_var(name, "B", 0.0, 1.0)
-        if model.c[i] != 0:
-            master_builder.add_obj(name, float(model.c[i]))
- 
-    master_builder.add_var("Upsilon", "C", upsilon_lower, np.inf)
-    master_builder.add_obj("Upsilon", 1.0)
+    if cuts:
+        latest_iter = cuts[-1].iteration
+        latest_cuts = [c for c in cuts if c.iteration == latest_iter]
+        for c in latest_cuts:
+            print_timed(f"Integrating Cut (scen {c.scenario}, iter {c.iteration}, RHS: {c.rhs:.2f})")
 
-    for r in model.shared_rows():
-        row = model.A.getrow(r)
-        terms = {model.var_names[j]: float(v) for j, v in zip(row.indices, row.data)}
-        sense, rhs = model.row_sense_rhs(r)
-        master_builder.add_row(terms, sense, rhs, model.constraint_labels[r])
+            terms = {name: -c.theta[name] for name in c.theta}
+            uname = f"Upsilon_s{c.scenario}"
+            terms[uname] = 1.0
+            master_model.add_row(terms, ">=", c.rhs, f"benders_cut_l{c.iteration}_s{c.scenario}")
 
-    for cut in cuts:
-        print("Cut", cut)
-        terms = {name: -theta for name, theta in cut.theta.items()}
-        print("Terms", terms)
+            cut_expr = pulp.lpSum(-c.theta[name] * master_pulp_vars[name] for name in c.theta) + master_pulp_vars[uname]
+            master_prob += (cut_expr >= c.rhs, f"benders_cut_l{c.iteration}_s{c.scenario}")
 
-        terms["Upsilon"] = 1.0
-        master_builder.add_row(terms, ">=", cut.rhs, f"benders_cut_l{cut.iteration}")
-
-    print(f"self._names: {master_builder._names}")
-    print(f"self._types: {master_builder._types}")
-    print(f"self._var_scenario: {master_builder._var_scenario}")
-    print(f"self._index: {master_builder._index}")
-    print(f"self._obj: {master_builder._obj}")
-    print(f"self._rows_i: {master_builder._rows_i}")
-    print(f"self._rows_j: {master_builder._rows_j}")
-    print(f"self._rows_v: {master_builder._rows_v}")
-    print(f"self._row_lower: {master_builder._row_lower}")
-    print(f"self._row_upper: {master_builder._row_upper}")
-    print(f"self._row_labels: {master_builder._row_labels}")
-    print(f"self._row_scenario: {master_builder._row_scenario}")    
-
-    print("##############################################################################")    
- 
-    master_model = master_builder.build()
-
-    break
-
-    """
     # ------------------------------------------------------------------
-    # SECTION II: Translate Master to PulP and Solve
+    # SECTION II: Solve the master problem
     # ------------------------------------------------------------------
-
-    master_prob = pulp.LpProblem(f"Benders_Master_k{iteration}", pulp.LpMinimize)
- 
-    master_pulp_vars: dict[str, pulp.LpVariable] = {}
-    for i, name in enumerate(master_model.var_names):
-        vtype = pulp.LpBinary if master_model.var_types[i] == "B" else pulp.LpContinuous
-        lb = None if master_model.lower[i] == -np.inf else float(master_model.lower[i])
-        ub = None if master_model.upper[i] == np.inf else float(master_model.upper[i])
-        master_pulp_vars[name] = pulp.LpVariable(name, lowBound=lb, upBound=ub, cat=vtype)
- 
-    master_prob += pulp.lpSum(
-        float(master_model.c[i]) * master_pulp_vars[master_model.var_names[i]]
-        for i in range(len(master_model.c))
-        if master_model.c[i] != 0
-    )
- 
-    for r in range(master_model.A.shape[0]):
-        row = master_model.A.getrow(r)
-        expr = pulp.lpSum(
-            float(v) * master_pulp_vars[master_model.var_names[j]]
-            for j, v in zip(row.indices, row.data)
-        )
-        sense, rhs = master_model.row_sense_rhs(r)
-        label = master_model.constraint_labels[r]
-        if sense == "=":
-            master_prob += (expr == rhs, label)
-        elif sense == "<=":
-            master_prob += (expr <= rhs, label)
-        else:
-            master_prob += (expr >= rhs, label)
+    if best_u is not None:
+        for name, val in best_u.items():
+            master_pulp_vars[name].setInitialValue(val)
 
     print_timed("Master solving...")
     master_start = time.perf_counter()
-    master_status_code = master_prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=30, gapRel=0.005))
-    master_status = pulp.LpStatus[master_status_code]
+    master_solution = master_prob.solve(pulp.PULP_CBC_CMD(msg=False, gapRel=1e-2, warmStart=True, keepFiles=True)) # timeLimit=100, gapRel=0.05, 
     print_timed("Master solving complete")
     master_time = time.perf_counter() - master_start
- 
-    u_values = {
-        name: int(round(var.varValue))
-        for name, var in master_pulp_vars.items()
-        if name != "Upsilon"
-    }
+
+    # The decisions of the master, which to open and which not to
+    u_values = {name: int(round(var.varValue)) for name, var in master_pulp_vars.items() if name not in upsilon_names}
+    upsilon_values = {uname: master_pulp_vars[uname].varValue for uname in upsilon_names}
     
-    fixed_cost = sum(
-        float(model.c[i]) * u_values[model.var_names[i]]
-        for i in model.first_stage_vars()
-        if model.c[i] != 0
-    )
-    if master_status == "Optimal":
-        lower_bound = float(pulp.value(master_prob.objective))
- 
+    fixed_cost = sum(float(model.c[i]) * u_values[model.var_names[i]] for i in model.first_stage_vars() if model.c[i] != 0)
+    lower_bound = float(pulp.value(master_prob.objective))
+    lbs.append(lower_bound)
+
     # ------------------------------------------------------------------
-    # Subproblems: one per scenario, using THIS iteration's u_values.
-    # Same assembly pattern as the single-scenario test, run K times.
+    # SECTION III: Solve the subproblem for every scenario
     # ------------------------------------------------------------------
+
     expected_recourse_cost = 0.0
-    theta_agg = {name: 0.0 for name in first_stage_names}
+    new_cuts_this_iter = []
 
     subproblem_start = time.perf_counter()
-    for scenario in tqdm(range(pd.num_scenarios), desc=f"Iteration {iteration} - Subproblems", unit="scenario", leave=False):
-        sub_builder = MILPBuilder()
-        probs = pd.scenario_probs[scenario]
-
-        for i in model.scenario_vars(scenario):
-            name = model.var_names[i]
-            sub_builder.add_var(name, "C", float(model.lower[i]), float(model.upper[i]))
-            if model.c[i] != 0:
-                sub_builder.add_obj(name, float(model.c[i]))
- 
+    for scenario_num in tqdm(range(pd.num_scenarios), desc=f"Iteration {iteration} - Subproblems", unit="scenario", leave=False):
+        # Clone the base problem structure instantly (preserves memory reference to variables)
+        sub_prob = base_sub_probs[scenario_num].copy()
+        sub_pulp_vars = base_sub_vars[scenario_num]
+        
+        # Inject the fixing constraints specific to this iteration's master solution
         for i in model.first_stage_vars():
             name = model.var_names[i]
-            sub_builder.add_var(u_fixed_prefix + name, "C", 0.0, 1.0)
- 
-        for r in model.scenario_rows(scenario):
-            row = model.A.getrow(r)
-            terms = {}
-            for j, v in zip(row.indices, row.data):
-                name = model.var_names[j]
-                if name in first_stage_names:
-                    name = u_fixed_prefix + name
-                terms[name] = float(v)
-            sense, rhs = model.row_sense_rhs(r)
-            sub_builder.add_row(terms, sense, rhs, model.constraint_labels[r])
- 
-        for i in model.first_stage_vars():
-            name = model.var_names[i]
-            sub_builder.add_row({u_fixed_prefix + name: 1.0}, "=", float(u_values[name]), f"fix_{name}")
- 
-        sub_model = sub_builder.build()
-        sub_prob = pulp.LpProblem(f"Benders_Subproblem_s{scenario}_k{iteration}", pulp.LpMinimize)
- 
-        sub_pulp_vars: dict[str, pulp.LpVariable] = {}
-        for i, name in enumerate(sub_model.var_names):
-            lb = None if sub_model.lower[i] == -np.inf else float(sub_model.lower[i])
-            ub = None if sub_model.upper[i] == np.inf else float(sub_model.upper[i])
-            sub_pulp_vars[name] = pulp.LpVariable(name, lowBound=lb, upBound=ub, cat=pulp.LpContinuous)
- 
-        sub_prob += pulp.lpSum(
-            float(sub_model.c[i]) * sub_pulp_vars[sub_model.var_names[i]]
-            for i in range(len(sub_model.c))
-            if sub_model.c[i] != 0
-        )
- 
-        sub_pulp_constraints: dict[str, pulp.LpConstraint] = {}
-        for r in range(sub_model.A.shape[0]):
-            row = sub_model.A.getrow(r)
-            expr = pulp.lpSum(
-                float(v) * sub_pulp_vars[sub_model.var_names[j]]
-                for j, v in zip(row.indices, row.data)
-            )
-            sense, rhs = sub_model.row_sense_rhs(r)
-            label = sub_model.constraint_labels[r]
-            if sense == "=":
-                sub_prob += (expr == rhs, label)
-            elif sense == "<=":
-                sub_prob += (expr <= rhs, label)
-            else:
-                sub_prob += (expr >= rhs, label)
-            sub_pulp_constraints[label] = sub_prob.constraints[label]
+            proxy_name = u_fixed_prefix + name
+            sub_prob += (sub_pulp_vars[proxy_name] == float(u_values[name]), f"fix_{name}")
 
-        print_timed("Subproblem solving...")
         sub_status_code = sub_prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=30))
         sub_status = pulp.LpStatus[sub_status_code]
         sub_cost = float(pulp.value(sub_prob.objective)) if sub_status == "Optimal" else None
-        print_timed("Subproblem solving complete")
  
         if sub_status != "Optimal":
-            raise RuntimeError(
-                f"Scenario {scenario} subproblem was not optimal: "
-                f"{sub_status}"
-            )
+            raise RuntimeError(f"Scenario {scenario} subproblem was not optimal: {sub_status}")
  
-        expected_recourse_cost += probs * sub_cost
-        print_timed(f"total dispatch cost it{iteration}:", expected_recourse_cost)
-
+        # Calculate costs
+        sub_cost = float(pulp.value(sub_prob.objective))
+        expected_recourse_cost += sub_cost
+        
+        # Extract dual variables for cut generation
+        theta_s = {}
         for i in model.first_stage_vars():
             name = model.var_names[i]
-            theta_agg[name] += probs * sub_pulp_constraints[f"fix_{name}"].pi
+            theta_s[name] = sub_prob.constraints[f"fix_{name}"].pi
 
-            pi = sub_pulp_constraints[f"fix_{name}"].pi
-            print_timed(
-                f"s={scenario}, {name}: "
-                f"u={u_values[name]}, "
-                f"pi={pi}"
-            )
-    
+        rhs_s = sub_cost - sum(theta_s[name] * u_values[name] for name in theta_s)
+        new_cuts_this_iter.append(BendersCut(theta=theta_s, rhs=rhs_s, iteration=iteration, scenario=scenario_num))
+
+    cuts_before = len(cuts)
+    cuts.extend(new_cuts_this_iter)
     subproblem_time = time.perf_counter() - subproblem_start
 
     # ------------------------------------------------------------------
-    # Aggregate into one cut (2c), update LB/UB, log, advance
+    # SECTION IV: Update the Upper Bound
     # ------------------------------------------------------------------
-    rhs = expected_recourse_cost - sum(theta_agg[name] * u_values[name] for name in theta_agg)
-    print_timed(f"rhs it{iteration}:", rhs)
-
-    cuts_before = len(cuts)
-    cuts.append(BendersCut(theta=dict(theta_agg), rhs=rhs, iteration=iteration))
-    cut_value_at_current_u = (rhs + sum(theta_agg[name] * u_values[name] for name in theta_agg))
-    cut_tightness_error = cut_value_at_current_u - expected_recourse_cost
-
-    print_timed(
-            f"CHECK cut@u={cut_value_at_current_u:.6f}, "
-            f"Q(u)={expected_recourse_cost:.6f}, "
-            f"error={cut_tightness_error:.6e}"
-        )
+    cuts_after = len(cuts)
 
     candidate_upper_bound = fixed_cost + expected_recourse_cost
     if candidate_upper_bound < upper_bound:
         upper_bound = candidate_upper_bound
         best_u = dict(u_values)
-    print_timed(f"upper bound it{iteration}:", upper_bound)
+
+    ubs.append(upper_bound)
+
+    if lower_bound > upper_bound + 1e-6:
+        raise RuntimeError(f"Invalid Benders bounds: LB={lower_bound}, UB={upper_bound}")
+    gap = upper_bound - lower_bound
+
+    # Concise one-line iteration summary
+    print_timed(
+        f"Iter {iteration:3d} | LB: {lower_bound:12.2f} | UB: {upper_bound:12.2f} | "
+        f"Gap: {gap:12.2f} | M-Time: {master_time:.2f}s | Sub-Time: {subproblem_time:.2f}s"
+    )
 
     # ------------------------------------------------------------------
     # Log iterations
@@ -343,30 +300,15 @@ while iteration < max_iterations:
     iteration_time = time.perf_counter() - iteration_start
     iteration_history.append({
         "iteration": int(iteration),
-        "master_status": master_status,
-        "master_objective": (
-            float(pulp.value(master_prob.objective))
-            if pulp.value(master_prob.objective) is not None
-            else None
-        ),
+        "master_objective": float(lower_bound),
         "fixed_cost": float(fixed_cost),
         "recourse_cost": float(expected_recourse_cost),
         "candidate_upper_bound": float(candidate_upper_bound),
-        "global_lower_bound": (
-            float(lower_bound) if np.isfinite(lower_bound) else None
-        ),
-        "global_upper_bound": (
-            float(upper_bound) if np.isfinite(upper_bound) else None
-        ),
-        "absolute_gap": (
-            float(upper_bound - lower_bound)
-            if np.isfinite(lower_bound) and np.isfinite(upper_bound)
-            else None
-        ),
+        "global_lower_bound": float(lower_bound) if np.isfinite(lower_bound) else None,
+        "global_upper_bound": float(upper_bound) if np.isfinite(upper_bound) else None,
+        "absolute_gap": float(gap) if np.isfinite(gap) else None,
         "cuts_before": cuts_before,
         "cuts_after": len(cuts),
-        "cut_rhs": float(rhs),
-        "cut_tightness_error": float(cut_tightness_error),
         "master_time_seconds": float(master_time),
         "subproblem_time_seconds": float(subproblem_time),
         "iteration_time_seconds": float(iteration_time),
@@ -405,8 +347,35 @@ pbar_outer.close()
 # ---------------------------------------------------------
 # Extract and Log Results
 # ---------------------------------------------------------
+print("lower bounds:", lbs)
+print("upper bounds:", ubs)
+print("cuts", cuts)
 
 found_solution = best_u is not None
+
+solution_details = {}
+if found_solution:
+    sorted_keys = sorted(best_u.keys())
+    bitstring = "".join(str(best_u[k]) for k in sorted_keys)
+    
+    generator_schedules = {}
+    for name, val in best_u.items():
+        if val == 1:
+            parts = name.split("_")
+            gen_id = parts[1]
+            hour_id = int(parts[2].replace("hr", ""))
+            if gen_id not in generator_schedules:
+                generator_schedules[gen_id] = []
+            generator_schedules[gen_id].append(hour_id)
+            
+    for gen_id in generator_schedules:
+        generator_schedules[gen_id].sort()
+
+    solution_details = {
+        "commitment_bitstring": bitstring,
+        "raw_u_values": best_u,
+        "active_hours_per_generator": generator_schedules
+    }
 
 converged = (
     np.isfinite(lower_bound)
@@ -415,11 +384,35 @@ converged = (
        <= gap_tolerance * max(1.0, abs(upper_bound))
 )
 
-cost_of_solution = (
-    float(round(upper_bound, 2))
-    if found_solution
-    else None
-)
+final_expected_cost = None
+if best_u is not None:
+    final_expected_recourse = 0.0
+    final_scenario_costs = {}
+
+    for scenario_num in range(pd.num_scenarios):
+        sub_prob = base_sub_probs[scenario_num].copy()
+        sub_pulp_vars = base_sub_vars[scenario_num]
+        
+        for i in model.first_stage_vars():
+            name = model.var_names[i]
+            proxy_name = u_fixed_prefix + name
+            sub_prob += (sub_pulp_vars[proxy_name] == float(best_u[name]), f"fix_{name}")
+
+        sub_prob.solve(pulp.PULP_CBC_CMD(msg=False))
+        weighted_scen_cost = float(pulp.value(sub_prob.objective)) # Already includes prob
+        
+        prob = pd.scenario_probs[scenario_num]
+        raw_scen_cost = weighted_scen_cost / prob if prob > 0 else 0.0
+        
+        final_expected_recourse += weighted_scen_cost # DO NOT multiply by prob again!
+        final_scenario_costs[f"scenario_{scenario_num}"] = round(raw_scen_cost, 2)
+
+    final_fixed_cost = sum(
+        float(model.c[i]) * best_u[model.var_names[i]] 
+        for i in model.first_stage_vars() if model.c[i] != 0
+    )
+    
+    final_expected_cost = final_fixed_cost + final_expected_recourse
 
 final_gap = (
     float(upper_bound - lower_bound)
@@ -427,71 +420,33 @@ final_gap = (
     else None
 )
 
-print("Cuts made during iterations:", cuts)
-
 print("\n[Results Summary]")
-print(f"  -> Solver Status:        {'Converged' if converged else 'Stopped'}")
-print(f"  -> Found Solution?       {found_solution}")
+print(f"  -> Solver Status:         {'Converged' if converged else 'Stopped'}")
+print(f"  -> Found Solution?        {found_solution}")
 
 if found_solution:
-    print(f"  -> Best Expected Cost:   ${cost_of_solution:,.2f}")
+    print(f"  -> Best Expected Cost:    ${final_expected_cost:,.2f}")
 else:
-    print(f"  -> Best Expected Cost:   N/A")
+    print(f"  -> Best Expected Cost:    N/A")
 
 print(
-    f"  -> Final Lower Bound:    "
+    f"  -> Final Lower Bound:     "
     f"${lower_bound:,.2f}" if np.isfinite(lower_bound)
-    else "  -> Final Lower Bound:    N/A"
+    else "  -> Final Lower Bound:     N/A"
 )
 
 print(
-    f"  -> Final Upper Bound:    "
+    f"  -> Final Upper Bound:     "
     f"${upper_bound:,.2f}" if np.isfinite(upper_bound)
-    else "  -> Final Upper Bound:    N/A"
+    else "  -> Final Upper Bound:     N/A"
 )
 
 print(
-    f"  -> Final Gap:            "
+    f"  -> Final Gap:             "
     f"${final_gap:,.2f}" if final_gap is not None
-    else "  -> Final Gap:            N/A"
+    else "  -> Final Gap:             N/A"
 )
 
 print(f"  -> Iterations:            {iteration}")
 print(f"  -> Cuts Generated:        {len(cuts)}")
 print(f"  -> Algorithm Converged?   {converged}")
-
-results_payload = {
-    "metadata": {
-        "experiment_name": "4-Generator Stochastic Unit Commitment",
-        "solver_name": "Benders Decomposition with PuLP CBC",
-        "seed_used": int(seed),
-    },
-    "core_required_metrics": {
-        "found_solution": int(found_solution),
-        "cost_of_solution": cost_of_solution,
-        "converged": int(converged),
-        "final_lower_bound": (
-            float(lower_bound)
-            if np.isfinite(lower_bound)
-            else None
-        ),
-        "final_upper_bound": (
-            float(upper_bound)
-            if np.isfinite(upper_bound)
-            else None
-        ),
-        "final_gap": final_gap,
-        "iterations": int(iteration),
-        "cuts_generated": int(len(cuts)),
-    },
-    "iteration_history": iteration_history,
-}
-
-os.makedirs("results", exist_ok=True)
-json_path = os.path.join("results", "pulp_benders_suc.json")
-with open(json_path, "w", encoding="utf-8") as f:
-    json.dump(results_payload, f, indent=4)
-
-print(f"\n[SUCCESS] Comprehensive JSON logged to: '{json_path}'")
-print("==========================================================================\n")
-"""

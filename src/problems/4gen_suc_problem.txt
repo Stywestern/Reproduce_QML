@@ -7,17 +7,17 @@
   Generators:                4
   Hours:                     24
   Scenarios:                 3
-  Total Variables:           456
+  Total Variables:           528
     Binary:                  96
-    Continuous:              360
+    Continuous:              432
   Total Constraints:         816
 
 2. FIRST-STAGE / SCENARIO PARTITION  (for Benders / ADMM)
   First-stage variables:     96   (commitment u_g,t -- shared master decision)
   Shared rows:               168   (min up/down time coupling)
-  Scenario 0: 120 vars, 216 rows   (dispatch P, shed + balance/capacity -- independent given u)
-  Scenario 1: 120 vars, 216 rows   (dispatch P, shed + balance/capacity -- independent given u)
-  Scenario 2: 120 vars, 216 rows   (dispatch P, shed + balance/capacity -- independent given u)
+  Scenario 0: 144 vars, 216 rows   (dispatch P, shed + balance/capacity -- independent given u)
+  Scenario 1: 144 vars, 216 rows   (dispatch P, shed + balance/capacity -- independent given u)
+  Scenario 2: 144 vars, 216 rows   (dispatch P, shed + balance/capacity -- independent given u)
   -> Benders: master = first-stage vars + shared rows;
              subproblem_s = scenario_vars(s)/scenario_rows(s), parameterized by u.
   -> ADMM/progressive hedging: one subproblem per scenario over its own vars,
@@ -48,15 +48,15 @@
     u_gen0_hr5: B [0.0, 1.0]
   Continuous:
     shed_hr0_scen0: C [0.0, 10000.0]  scenario=0
+    spill_hr0_scen0: C [0.0, 10000.0]  scenario=0
     P_gen0_hr0_scen0: C [0.0, 150.94526690896765]  scenario=0
     P_gen1_hr0_scen0: C [0.0, 114.05292445926294]  scenario=0
     P_gen2_hr0_scen0: C [0.0, 81.26801561637387]  scenario=0
     P_gen3_hr0_scen0: C [0.0, 37.79266308680072]  scenario=0
-    shed_hr1_scen0: C [0.0, 10000.0]  scenario=0
 
 6. OBJECTIVE FUNCTION
   Sense: min
-  Number of objective terms: 456
+  Number of objective terms: 528
     +500.000 * u_gen0_hr0
     +500.000 * u_gen0_hr1
     +500.000 * u_gen0_hr2
@@ -74,78 +74,78 @@
     +500.000 * u_gen0_hr14
 
 7. CONSTRAINTS
-  [balance_s0_t0] +1*shed_hr0_scen0 +1*P_gen0_hr0_scen0 +1*P_gen1_hr0_scen0 +1*P_gen2_hr0_scen0 +1*P_gen3_hr0_scen0 = 95.97836801794142
-  [balance_s0_t1] +1*shed_hr1_scen0 +1*P_gen0_hr1_scen0 +1*P_gen1_hr1_scen0 +1*P_gen2_hr1_scen0 +1*P_gen3_hr1_scen0 = 88.88948233285747
-  [balance_s0_t2] +1*shed_hr2_scen0 +1*P_gen0_hr2_scen0 +1*P_gen1_hr2_scen0 +1*P_gen2_hr2_scen0 +1*P_gen3_hr2_scen0 = 44.57501850113931
-  [balance_s0_t3] +1*shed_hr3_scen0 +1*P_gen0_hr3_scen0 +1*P_gen1_hr3_scen0 +1*P_gen2_hr3_scen0 +1*P_gen3_hr3_scen0 = 73.82632990755053
-  [balance_s0_t4] +1*shed_hr4_scen0 +1*P_gen0_hr4_scen0 +1*P_gen1_hr4_scen0 +1*P_gen2_hr4_scen0 +1*P_gen3_hr4_scen0 = 110.26248094452227
-  [balance_s0_t5] +1*shed_hr5_scen0 +1*P_gen0_hr5_scen0 +1*P_gen1_hr5_scen0 +1*P_gen2_hr5_scen0 +1*P_gen3_hr5_scen0 = 100.2517642971008
-  [balance_s0_t6] +1*shed_hr6_scen0 +1*P_gen0_hr6_scen0 +1*P_gen1_hr6_scen0 +1*P_gen2_hr6_scen0 +1*P_gen3_hr6_scen0 = 80.23518803250084
-  [balance_s0_t7] +1*shed_hr7_scen0 +1*P_gen0_hr7_scen0 +1*P_gen1_hr7_scen0 +1*P_gen2_hr7_scen0 +1*P_gen3_hr7_scen0 = 166.1051921891719
-  [balance_s0_t8] +1*shed_hr8_scen0 +1*P_gen0_hr8_scen0 +1*P_gen1_hr8_scen0 +1*P_gen2_hr8_scen0 +1*P_gen3_hr8_scen0 = 174.69308125617994
-  [balance_s0_t9] +1*shed_hr9_scen0 +1*P_gen0_hr9_scen0 +1*P_gen1_hr9_scen0 +1*P_gen2_hr9_scen0 +1*P_gen3_hr9_scen0 = 134.73854327042983
-  [balance_s0_t10] +1*shed_hr10_scen0 +1*P_gen0_hr10_scen0 +1*P_gen1_hr10_scen0 +1*P_gen2_hr10_scen0 +1*P_gen3_hr10_scen0 = 192.11388998289573
-  [balance_s0_t11] +1*shed_hr11_scen0 +1*P_gen0_hr11_scen0 +1*P_gen1_hr11_scen0 +1*P_gen2_hr11_scen0 +1*P_gen3_hr11_scen0 = 180.6474709176782
-  [balance_s0_t12] +1*shed_hr12_scen0 +1*P_gen0_hr12_scen0 +1*P_gen1_hr12_scen0 +1*P_gen2_hr12_scen0 +1*P_gen3_hr12_scen0 = 201.37400712396496
-  [balance_s0_t13] +1*shed_hr13_scen0 +1*P_gen0_hr13_scen0 +1*P_gen1_hr13_scen0 +1*P_gen2_hr13_scen0 +1*P_gen3_hr13_scen0 = 195.68443705073608
-  [balance_s0_t14] +1*shed_hr14_scen0 +1*P_gen0_hr14_scen0 +1*P_gen1_hr14_scen0 +1*P_gen2_hr14_scen0 +1*P_gen3_hr14_scen0 = 177.0369167736548
-  [balance_s0_t15] +1*shed_hr15_scen0 +1*P_gen0_hr15_scen0 +1*P_gen1_hr15_scen0 +1*P_gen2_hr15_scen0 +1*P_gen3_hr15_scen0 = 195.04611593369776
-  [balance_s0_t16] +1*shed_hr16_scen0 +1*P_gen0_hr16_scen0 +1*P_gen1_hr16_scen0 +1*P_gen2_hr16_scen0 +1*P_gen3_hr16_scen0 = 166.79314519257528
-  [balance_s0_t17] +1*shed_hr17_scen0 +1*P_gen0_hr17_scen0 +1*P_gen1_hr17_scen0 +1*P_gen2_hr17_scen0 +1*P_gen3_hr17_scen0 = 129.39407555815768
-  [balance_s0_t18] +1*shed_hr18_scen0 +1*P_gen0_hr18_scen0 +1*P_gen1_hr18_scen0 +1*P_gen2_hr18_scen0 +1*P_gen3_hr18_scen0 = 140.29192703944148
-  [balance_s0_t19] +1*shed_hr19_scen0 +1*P_gen0_hr19_scen0 +1*P_gen1_hr19_scen0 +1*P_gen2_hr19_scen0 +1*P_gen3_hr19_scen0 = 70.21955324939267
-  [balance_s0_t20] +1*shed_hr20_scen0 +1*P_gen0_hr20_scen0 +1*P_gen1_hr20_scen0 +1*P_gen2_hr20_scen0 +1*P_gen3_hr20_scen0 = 58.84864987642794
-  [balance_s0_t21] +1*shed_hr21_scen0 +1*P_gen0_hr21_scen0 +1*P_gen1_hr21_scen0 +1*P_gen2_hr21_scen0 +1*P_gen3_hr21_scen0 = 59.508954333495154
-  [balance_s0_t22] +1*shed_hr22_scen0 +1*P_gen0_hr22_scen0 +1*P_gen1_hr22_scen0 +1*P_gen2_hr22_scen0 +1*P_gen3_hr22_scen0 = 93.13117097525523
-  [balance_s0_t23] +1*shed_hr23_scen0 +1*P_gen0_hr23_scen0 +1*P_gen1_hr23_scen0 +1*P_gen2_hr23_scen0 +1*P_gen3_hr23_scen0 = 69.56668566732684
-  [balance_s1_t0] +1*shed_hr0_scen1 +1*P_gen0_hr0_scen1 +1*P_gen1_hr0_scen1 +1*P_gen2_hr0_scen1 +1*P_gen3_hr0_scen1 = 84.46292779736933
-  [balance_s1_t1] +1*shed_hr1_scen1 +1*P_gen0_hr1_scen1 +1*P_gen1_hr1_scen1 +1*P_gen2_hr1_scen1 +1*P_gen3_hr1_scen1 = 90.66104888762241
-  [balance_s1_t2] +1*shed_hr2_scen1 +1*P_gen0_hr2_scen1 +1*P_gen1_hr2_scen1 +1*P_gen2_hr2_scen1 +1*P_gen3_hr2_scen1 = 84.30165527955842
-  [balance_s1_t3] +1*shed_hr3_scen1 +1*P_gen0_hr3_scen1 +1*P_gen1_hr3_scen1 +1*P_gen2_hr3_scen1 +1*P_gen3_hr3_scen1 = 50.347994950799205
-  [balance_s1_t4] +1*shed_hr4_scen1 +1*P_gen0_hr4_scen1 +1*P_gen1_hr4_scen1 +1*P_gen2_hr4_scen1 +1*P_gen3_hr4_scen1 = 91.75091136150883
-  [balance_s1_t5] +1*shed_hr5_scen1 +1*P_gen0_hr5_scen1 +1*P_gen1_hr5_scen1 +1*P_gen2_hr5_scen1 +1*P_gen3_hr5_scen1 = 88.0156642880824
-  [balance_s1_t6] +1*shed_hr6_scen1 +1*P_gen0_hr6_scen1 +1*P_gen1_hr6_scen1 +1*P_gen2_hr6_scen1 +1*P_gen3_hr6_scen1 = 96.7414833832122
-  [balance_s1_t7] +1*shed_hr7_scen1 +1*P_gen0_hr7_scen1 +1*P_gen1_hr7_scen1 +1*P_gen2_hr7_scen1 +1*P_gen3_hr7_scen1 = 121.41279267492223
-  [balance_s1_t8] +1*shed_hr8_scen1 +1*P_gen0_hr8_scen1 +1*P_gen1_hr8_scen1 +1*P_gen2_hr8_scen1 +1*P_gen3_hr8_scen1 = 153.75123203502594
-  [balance_s1_t9] +1*shed_hr9_scen1 +1*P_gen0_hr9_scen1 +1*P_gen1_hr9_scen1 +1*P_gen2_hr9_scen1 +1*P_gen3_hr9_scen1 = 151.53210837925792
-  [balance_s1_t10] +1*shed_hr10_scen1 +1*P_gen0_hr10_scen1 +1*P_gen1_hr10_scen1 +1*P_gen2_hr10_scen1 +1*P_gen3_hr10_scen1 = 189.72215884745785
-  [balance_s1_t11] +1*shed_hr11_scen1 +1*P_gen0_hr11_scen1 +1*P_gen1_hr11_scen1 +1*P_gen2_hr11_scen1 +1*P_gen3_hr11_scen1 = 144.56544350028696
-  [balance_s1_t12] +1*shed_hr12_scen1 +1*P_gen0_hr12_scen1 +1*P_gen1_hr12_scen1 +1*P_gen2_hr12_scen1 +1*P_gen3_hr12_scen1 = 197.0448663118579
-  [balance_s1_t13] +1*shed_hr13_scen1 +1*P_gen0_hr13_scen1 +1*P_gen1_hr13_scen1 +1*P_gen2_hr13_scen1 +1*P_gen3_hr13_scen1 = 208.11267946181576
-  [balance_s1_t14] +1*shed_hr14_scen1 +1*P_gen0_hr14_scen1 +1*P_gen1_hr14_scen1 +1*P_gen2_hr14_scen1 +1*P_gen3_hr14_scen1 = 177.44067605546283
-  [balance_s1_t15] +1*shed_hr15_scen1 +1*P_gen0_hr15_scen1 +1*P_gen1_hr15_scen1 +1*P_gen2_hr15_scen1 +1*P_gen3_hr15_scen1 = 192.04750854394317
-  [balance_s1_t16] +1*shed_hr16_scen1 +1*P_gen0_hr16_scen1 +1*P_gen1_hr16_scen1 +1*P_gen2_hr16_scen1 +1*P_gen3_hr16_scen1 = 113.97597366488196
-  [balance_s1_t17] +1*shed_hr17_scen1 +1*P_gen0_hr17_scen1 +1*P_gen1_hr17_scen1 +1*P_gen2_hr17_scen1 +1*P_gen3_hr17_scen1 = 160.04773405565138
-  [balance_s1_t18] +1*shed_hr18_scen1 +1*P_gen0_hr18_scen1 +1*P_gen1_hr18_scen1 +1*P_gen2_hr18_scen1 +1*P_gen3_hr18_scen1 = 141.26983861670396
-  [balance_s1_t19] +1*shed_hr19_scen1 +1*P_gen0_hr19_scen1 +1*P_gen1_hr19_scen1 +1*P_gen2_hr19_scen1 +1*P_gen3_hr19_scen1 = 129.71120263594636
-  [balance_s1_t20] +1*shed_hr20_scen1 +1*P_gen0_hr20_scen1 +1*P_gen1_hr20_scen1 +1*P_gen2_hr20_scen1 +1*P_gen3_hr20_scen1 = 54.25114261243627
-  [balance_s1_t21] +1*shed_hr21_scen1 +1*P_gen0_hr21_scen1 +1*P_gen1_hr21_scen1 +1*P_gen2_hr21_scen1 +1*P_gen3_hr21_scen1 = 94.934451480922
-  [balance_s1_t22] +1*shed_hr22_scen1 +1*P_gen0_hr22_scen1 +1*P_gen1_hr22_scen1 +1*P_gen2_hr22_scen1 +1*P_gen3_hr22_scen1 = 86.02291922509207
-  [balance_s1_t23] +1*shed_hr23_scen1 +1*P_gen0_hr23_scen1 +1*P_gen1_hr23_scen1 +1*P_gen2_hr23_scen1 +1*P_gen3_hr23_scen1 = 63.751849802585895
-  [balance_s2_t0] +1*shed_hr0_scen2 +1*P_gen0_hr0_scen2 +1*P_gen1_hr0_scen2 +1*P_gen2_hr0_scen2 +1*P_gen3_hr0_scen2 = 74.60984492246445
-  [balance_s2_t1] +1*shed_hr1_scen2 +1*P_gen0_hr1_scen2 +1*P_gen1_hr1_scen2 +1*P_gen2_hr1_scen2 +1*P_gen3_hr1_scen2 = 80.9847181151449
-  [balance_s2_t2] +1*shed_hr2_scen2 +1*P_gen0_hr2_scen2 +1*P_gen1_hr2_scen2 +1*P_gen2_hr2_scen2 +1*P_gen3_hr2_scen2 = 105.9665098216403
-  [balance_s2_t3] +1*shed_hr3_scen2 +1*P_gen0_hr3_scen2 +1*P_gen1_hr3_scen2 +1*P_gen2_hr3_scen2 +1*P_gen3_hr3_scen2 = 55.93800913166275
-  [balance_s2_t4] +1*shed_hr4_scen2 +1*P_gen0_hr4_scen2 +1*P_gen1_hr4_scen2 +1*P_gen2_hr4_scen2 +1*P_gen3_hr4_scen2 = 117.8502813388001
-  [balance_s2_t5] +1*shed_hr5_scen2 +1*P_gen0_hr5_scen2 +1*P_gen1_hr5_scen2 +1*P_gen2_hr5_scen2 +1*P_gen3_hr5_scen2 = 131.16148394156698
-  [balance_s2_t6] +1*shed_hr6_scen2 +1*P_gen0_hr6_scen2 +1*P_gen1_hr6_scen2 +1*P_gen2_hr6_scen2 +1*P_gen3_hr6_scen2 = 133.23559948175756
-  [balance_s2_t7] +1*shed_hr7_scen2 +1*P_gen0_hr7_scen2 +1*P_gen1_hr7_scen2 +1*P_gen2_hr7_scen2 +1*P_gen3_hr7_scen2 = 116.9395640323923
-  [balance_s2_t8] +1*shed_hr8_scen2 +1*P_gen0_hr8_scen2 +1*P_gen1_hr8_scen2 +1*P_gen2_hr8_scen2 +1*P_gen3_hr8_scen2 = 166.5804439542917
-  [balance_s2_t9] +1*shed_hr9_scen2 +1*P_gen0_hr9_scen2 +1*P_gen1_hr9_scen2 +1*P_gen2_hr9_scen2 +1*P_gen3_hr9_scen2 = 183.9104796682991
-  [balance_s2_t10] +1*shed_hr10_scen2 +1*P_gen0_hr10_scen2 +1*P_gen1_hr10_scen2 +1*P_gen2_hr10_scen2 +1*P_gen3_hr10_scen2 = 145.68459182122368
-  [balance_s2_t11] +1*shed_hr11_scen2 +1*P_gen0_hr11_scen2 +1*P_gen1_hr11_scen2 +1*P_gen2_hr11_scen2 +1*P_gen3_hr11_scen2 = 174.60186874584707
-  [balance_s2_t12] +1*shed_hr12_scen2 +1*P_gen0_hr12_scen2 +1*P_gen1_hr12_scen2 +1*P_gen2_hr12_scen2 +1*P_gen3_hr12_scen2 = 205.8925171459601
-  [balance_s2_t13] +1*shed_hr13_scen2 +1*P_gen0_hr13_scen2 +1*P_gen1_hr13_scen2 +1*P_gen2_hr13_scen2 +1*P_gen3_hr13_scen2 = 146.88537430140343
-  [balance_s2_t14] +1*shed_hr14_scen2 +1*P_gen0_hr14_scen2 +1*P_gen1_hr14_scen2 +1*P_gen2_hr14_scen2 +1*P_gen3_hr14_scen2 = 141.12979120017923
-  [balance_s2_t15] +1*shed_hr15_scen2 +1*P_gen0_hr15_scen2 +1*P_gen1_hr15_scen2 +1*P_gen2_hr15_scen2 +1*P_gen3_hr15_scen2 = 138.80282085784674
-  [balance_s2_t16] +1*shed_hr16_scen2 +1*P_gen0_hr16_scen2 +1*P_gen1_hr16_scen2 +1*P_gen2_hr16_scen2 +1*P_gen3_hr16_scen2 = 172.64279082471685
-  [balance_s2_t17] +1*shed_hr17_scen2 +1*P_gen0_hr17_scen2 +1*P_gen1_hr17_scen2 +1*P_gen2_hr17_scen2 +1*P_gen3_hr17_scen2 = 102.35956953911611
-  [balance_s2_t18] +1*shed_hr18_scen2 +1*P_gen0_hr18_scen2 +1*P_gen1_hr18_scen2 +1*P_gen2_hr18_scen2 +1*P_gen3_hr18_scen2 = 84.54149224487364
-  [balance_s2_t19] +1*shed_hr19_scen2 +1*P_gen0_hr19_scen2 +1*P_gen1_hr19_scen2 +1*P_gen2_hr19_scen2 +1*P_gen3_hr19_scen2 = 143.07419100752782
-  [balance_s2_t20] +1*shed_hr20_scen2 +1*P_gen0_hr20_scen2 +1*P_gen1_hr20_scen2 +1*P_gen2_hr20_scen2 +1*P_gen3_hr20_scen2 = 92.77089670541287
-  [balance_s2_t21] +1*shed_hr21_scen2 +1*P_gen0_hr21_scen2 +1*P_gen1_hr21_scen2 +1*P_gen2_hr21_scen2 +1*P_gen3_hr21_scen2 = 91.98247477805168
-  [balance_s2_t22] +1*shed_hr22_scen2 +1*P_gen0_hr22_scen2 +1*P_gen1_hr22_scen2 +1*P_gen2_hr22_scen2 +1*P_gen3_hr22_scen2 = 91.75207889599943
-  [balance_s2_t23] +1*shed_hr23_scen2 +1*P_gen0_hr23_scen2 +1*P_gen1_hr23_scen2 +1*P_gen2_hr23_scen2 +1*P_gen3_hr23_scen2 = 82.58041783229545
+  [balance_s0_t0] +1*shed_hr0_scen0 -1*spill_hr0_scen0 +1*P_gen0_hr0_scen0 +1*P_gen1_hr0_scen0 +1*P_gen2_hr0_scen0 +1*P_gen3_hr0_scen0 = 95.97836801794142
+  [balance_s0_t1] +1*shed_hr1_scen0 -1*spill_hr1_scen0 +1*P_gen0_hr1_scen0 +1*P_gen1_hr1_scen0 +1*P_gen2_hr1_scen0 +1*P_gen3_hr1_scen0 = 88.88948233285747
+  [balance_s0_t2] +1*shed_hr2_scen0 -1*spill_hr2_scen0 +1*P_gen0_hr2_scen0 +1*P_gen1_hr2_scen0 +1*P_gen2_hr2_scen0 +1*P_gen3_hr2_scen0 = 44.57501850113931
+  [balance_s0_t3] +1*shed_hr3_scen0 -1*spill_hr3_scen0 +1*P_gen0_hr3_scen0 +1*P_gen1_hr3_scen0 +1*P_gen2_hr3_scen0 +1*P_gen3_hr3_scen0 = 73.82632990755053
+  [balance_s0_t4] +1*shed_hr4_scen0 -1*spill_hr4_scen0 +1*P_gen0_hr4_scen0 +1*P_gen1_hr4_scen0 +1*P_gen2_hr4_scen0 +1*P_gen3_hr4_scen0 = 110.26248094452227
+  [balance_s0_t5] +1*shed_hr5_scen0 -1*spill_hr5_scen0 +1*P_gen0_hr5_scen0 +1*P_gen1_hr5_scen0 +1*P_gen2_hr5_scen0 +1*P_gen3_hr5_scen0 = 100.2517642971008
+  [balance_s0_t6] +1*shed_hr6_scen0 -1*spill_hr6_scen0 +1*P_gen0_hr6_scen0 +1*P_gen1_hr6_scen0 +1*P_gen2_hr6_scen0 +1*P_gen3_hr6_scen0 = 80.23518803250084
+  [balance_s0_t7] +1*shed_hr7_scen0 -1*spill_hr7_scen0 +1*P_gen0_hr7_scen0 +1*P_gen1_hr7_scen0 +1*P_gen2_hr7_scen0 +1*P_gen3_hr7_scen0 = 166.1051921891719
+  [balance_s0_t8] +1*shed_hr8_scen0 -1*spill_hr8_scen0 +1*P_gen0_hr8_scen0 +1*P_gen1_hr8_scen0 +1*P_gen2_hr8_scen0 +1*P_gen3_hr8_scen0 = 174.69308125617994
+  [balance_s0_t9] +1*shed_hr9_scen0 -1*spill_hr9_scen0 +1*P_gen0_hr9_scen0 +1*P_gen1_hr9_scen0 +1*P_gen2_hr9_scen0 +1*P_gen3_hr9_scen0 = 134.73854327042983
+  [balance_s0_t10] +1*shed_hr10_scen0 -1*spill_hr10_scen0 +1*P_gen0_hr10_scen0 +1*P_gen1_hr10_scen0 +1*P_gen2_hr10_scen0 +1*P_gen3_hr10_scen0 = 192.11388998289573
+  [balance_s0_t11] +1*shed_hr11_scen0 -1*spill_hr11_scen0 +1*P_gen0_hr11_scen0 +1*P_gen1_hr11_scen0 +1*P_gen2_hr11_scen0 +1*P_gen3_hr11_scen0 = 180.6474709176782
+  [balance_s0_t12] +1*shed_hr12_scen0 -1*spill_hr12_scen0 +1*P_gen0_hr12_scen0 +1*P_gen1_hr12_scen0 +1*P_gen2_hr12_scen0 +1*P_gen3_hr12_scen0 = 201.37400712396496
+  [balance_s0_t13] +1*shed_hr13_scen0 -1*spill_hr13_scen0 +1*P_gen0_hr13_scen0 +1*P_gen1_hr13_scen0 +1*P_gen2_hr13_scen0 +1*P_gen3_hr13_scen0 = 195.68443705073608
+  [balance_s0_t14] +1*shed_hr14_scen0 -1*spill_hr14_scen0 +1*P_gen0_hr14_scen0 +1*P_gen1_hr14_scen0 +1*P_gen2_hr14_scen0 +1*P_gen3_hr14_scen0 = 177.0369167736548
+  [balance_s0_t15] +1*shed_hr15_scen0 -1*spill_hr15_scen0 +1*P_gen0_hr15_scen0 +1*P_gen1_hr15_scen0 +1*P_gen2_hr15_scen0 +1*P_gen3_hr15_scen0 = 195.04611593369776
+  [balance_s0_t16] +1*shed_hr16_scen0 -1*spill_hr16_scen0 +1*P_gen0_hr16_scen0 +1*P_gen1_hr16_scen0 +1*P_gen2_hr16_scen0 +1*P_gen3_hr16_scen0 = 166.79314519257528
+  [balance_s0_t17] +1*shed_hr17_scen0 -1*spill_hr17_scen0 +1*P_gen0_hr17_scen0 +1*P_gen1_hr17_scen0 +1*P_gen2_hr17_scen0 +1*P_gen3_hr17_scen0 = 129.39407555815768
+  [balance_s0_t18] +1*shed_hr18_scen0 -1*spill_hr18_scen0 +1*P_gen0_hr18_scen0 +1*P_gen1_hr18_scen0 +1*P_gen2_hr18_scen0 +1*P_gen3_hr18_scen0 = 140.29192703944148
+  [balance_s0_t19] +1*shed_hr19_scen0 -1*spill_hr19_scen0 +1*P_gen0_hr19_scen0 +1*P_gen1_hr19_scen0 +1*P_gen2_hr19_scen0 +1*P_gen3_hr19_scen0 = 70.21955324939267
+  [balance_s0_t20] +1*shed_hr20_scen0 -1*spill_hr20_scen0 +1*P_gen0_hr20_scen0 +1*P_gen1_hr20_scen0 +1*P_gen2_hr20_scen0 +1*P_gen3_hr20_scen0 = 58.84864987642794
+  [balance_s0_t21] +1*shed_hr21_scen0 -1*spill_hr21_scen0 +1*P_gen0_hr21_scen0 +1*P_gen1_hr21_scen0 +1*P_gen2_hr21_scen0 +1*P_gen3_hr21_scen0 = 59.508954333495154
+  [balance_s0_t22] +1*shed_hr22_scen0 -1*spill_hr22_scen0 +1*P_gen0_hr22_scen0 +1*P_gen1_hr22_scen0 +1*P_gen2_hr22_scen0 +1*P_gen3_hr22_scen0 = 93.13117097525523
+  [balance_s0_t23] +1*shed_hr23_scen0 -1*spill_hr23_scen0 +1*P_gen0_hr23_scen0 +1*P_gen1_hr23_scen0 +1*P_gen2_hr23_scen0 +1*P_gen3_hr23_scen0 = 69.56668566732684
+  [balance_s1_t0] +1*shed_hr0_scen1 -1*spill_hr0_scen1 +1*P_gen0_hr0_scen1 +1*P_gen1_hr0_scen1 +1*P_gen2_hr0_scen1 +1*P_gen3_hr0_scen1 = 84.46292779736933
+  [balance_s1_t1] +1*shed_hr1_scen1 -1*spill_hr1_scen1 +1*P_gen0_hr1_scen1 +1*P_gen1_hr1_scen1 +1*P_gen2_hr1_scen1 +1*P_gen3_hr1_scen1 = 90.66104888762241
+  [balance_s1_t2] +1*shed_hr2_scen1 -1*spill_hr2_scen1 +1*P_gen0_hr2_scen1 +1*P_gen1_hr2_scen1 +1*P_gen2_hr2_scen1 +1*P_gen3_hr2_scen1 = 84.30165527955842
+  [balance_s1_t3] +1*shed_hr3_scen1 -1*spill_hr3_scen1 +1*P_gen0_hr3_scen1 +1*P_gen1_hr3_scen1 +1*P_gen2_hr3_scen1 +1*P_gen3_hr3_scen1 = 50.347994950799205
+  [balance_s1_t4] +1*shed_hr4_scen1 -1*spill_hr4_scen1 +1*P_gen0_hr4_scen1 +1*P_gen1_hr4_scen1 +1*P_gen2_hr4_scen1 +1*P_gen3_hr4_scen1 = 91.75091136150883
+  [balance_s1_t5] +1*shed_hr5_scen1 -1*spill_hr5_scen1 +1*P_gen0_hr5_scen1 +1*P_gen1_hr5_scen1 +1*P_gen2_hr5_scen1 +1*P_gen3_hr5_scen1 = 88.0156642880824
+  [balance_s1_t6] +1*shed_hr6_scen1 -1*spill_hr6_scen1 +1*P_gen0_hr6_scen1 +1*P_gen1_hr6_scen1 +1*P_gen2_hr6_scen1 +1*P_gen3_hr6_scen1 = 96.7414833832122
+  [balance_s1_t7] +1*shed_hr7_scen1 -1*spill_hr7_scen1 +1*P_gen0_hr7_scen1 +1*P_gen1_hr7_scen1 +1*P_gen2_hr7_scen1 +1*P_gen3_hr7_scen1 = 121.41279267492223
+  [balance_s1_t8] +1*shed_hr8_scen1 -1*spill_hr8_scen1 +1*P_gen0_hr8_scen1 +1*P_gen1_hr8_scen1 +1*P_gen2_hr8_scen1 +1*P_gen3_hr8_scen1 = 153.75123203502594
+  [balance_s1_t9] +1*shed_hr9_scen1 -1*spill_hr9_scen1 +1*P_gen0_hr9_scen1 +1*P_gen1_hr9_scen1 +1*P_gen2_hr9_scen1 +1*P_gen3_hr9_scen1 = 151.53210837925792
+  [balance_s1_t10] +1*shed_hr10_scen1 -1*spill_hr10_scen1 +1*P_gen0_hr10_scen1 +1*P_gen1_hr10_scen1 +1*P_gen2_hr10_scen1 +1*P_gen3_hr10_scen1 = 189.72215884745785
+  [balance_s1_t11] +1*shed_hr11_scen1 -1*spill_hr11_scen1 +1*P_gen0_hr11_scen1 +1*P_gen1_hr11_scen1 +1*P_gen2_hr11_scen1 +1*P_gen3_hr11_scen1 = 144.56544350028696
+  [balance_s1_t12] +1*shed_hr12_scen1 -1*spill_hr12_scen1 +1*P_gen0_hr12_scen1 +1*P_gen1_hr12_scen1 +1*P_gen2_hr12_scen1 +1*P_gen3_hr12_scen1 = 197.0448663118579
+  [balance_s1_t13] +1*shed_hr13_scen1 -1*spill_hr13_scen1 +1*P_gen0_hr13_scen1 +1*P_gen1_hr13_scen1 +1*P_gen2_hr13_scen1 +1*P_gen3_hr13_scen1 = 208.11267946181576
+  [balance_s1_t14] +1*shed_hr14_scen1 -1*spill_hr14_scen1 +1*P_gen0_hr14_scen1 +1*P_gen1_hr14_scen1 +1*P_gen2_hr14_scen1 +1*P_gen3_hr14_scen1 = 177.44067605546283
+  [balance_s1_t15] +1*shed_hr15_scen1 -1*spill_hr15_scen1 +1*P_gen0_hr15_scen1 +1*P_gen1_hr15_scen1 +1*P_gen2_hr15_scen1 +1*P_gen3_hr15_scen1 = 192.04750854394317
+  [balance_s1_t16] +1*shed_hr16_scen1 -1*spill_hr16_scen1 +1*P_gen0_hr16_scen1 +1*P_gen1_hr16_scen1 +1*P_gen2_hr16_scen1 +1*P_gen3_hr16_scen1 = 113.97597366488196
+  [balance_s1_t17] +1*shed_hr17_scen1 -1*spill_hr17_scen1 +1*P_gen0_hr17_scen1 +1*P_gen1_hr17_scen1 +1*P_gen2_hr17_scen1 +1*P_gen3_hr17_scen1 = 160.04773405565138
+  [balance_s1_t18] +1*shed_hr18_scen1 -1*spill_hr18_scen1 +1*P_gen0_hr18_scen1 +1*P_gen1_hr18_scen1 +1*P_gen2_hr18_scen1 +1*P_gen3_hr18_scen1 = 141.26983861670396
+  [balance_s1_t19] +1*shed_hr19_scen1 -1*spill_hr19_scen1 +1*P_gen0_hr19_scen1 +1*P_gen1_hr19_scen1 +1*P_gen2_hr19_scen1 +1*P_gen3_hr19_scen1 = 129.71120263594636
+  [balance_s1_t20] +1*shed_hr20_scen1 -1*spill_hr20_scen1 +1*P_gen0_hr20_scen1 +1*P_gen1_hr20_scen1 +1*P_gen2_hr20_scen1 +1*P_gen3_hr20_scen1 = 54.25114261243627
+  [balance_s1_t21] +1*shed_hr21_scen1 -1*spill_hr21_scen1 +1*P_gen0_hr21_scen1 +1*P_gen1_hr21_scen1 +1*P_gen2_hr21_scen1 +1*P_gen3_hr21_scen1 = 94.934451480922
+  [balance_s1_t22] +1*shed_hr22_scen1 -1*spill_hr22_scen1 +1*P_gen0_hr22_scen1 +1*P_gen1_hr22_scen1 +1*P_gen2_hr22_scen1 +1*P_gen3_hr22_scen1 = 86.02291922509207
+  [balance_s1_t23] +1*shed_hr23_scen1 -1*spill_hr23_scen1 +1*P_gen0_hr23_scen1 +1*P_gen1_hr23_scen1 +1*P_gen2_hr23_scen1 +1*P_gen3_hr23_scen1 = 63.751849802585895
+  [balance_s2_t0] +1*shed_hr0_scen2 -1*spill_hr0_scen2 +1*P_gen0_hr0_scen2 +1*P_gen1_hr0_scen2 +1*P_gen2_hr0_scen2 +1*P_gen3_hr0_scen2 = 74.60984492246445
+  [balance_s2_t1] +1*shed_hr1_scen2 -1*spill_hr1_scen2 +1*P_gen0_hr1_scen2 +1*P_gen1_hr1_scen2 +1*P_gen2_hr1_scen2 +1*P_gen3_hr1_scen2 = 80.9847181151449
+  [balance_s2_t2] +1*shed_hr2_scen2 -1*spill_hr2_scen2 +1*P_gen0_hr2_scen2 +1*P_gen1_hr2_scen2 +1*P_gen2_hr2_scen2 +1*P_gen3_hr2_scen2 = 105.9665098216403
+  [balance_s2_t3] +1*shed_hr3_scen2 -1*spill_hr3_scen2 +1*P_gen0_hr3_scen2 +1*P_gen1_hr3_scen2 +1*P_gen2_hr3_scen2 +1*P_gen3_hr3_scen2 = 55.93800913166275
+  [balance_s2_t4] +1*shed_hr4_scen2 -1*spill_hr4_scen2 +1*P_gen0_hr4_scen2 +1*P_gen1_hr4_scen2 +1*P_gen2_hr4_scen2 +1*P_gen3_hr4_scen2 = 117.8502813388001
+  [balance_s2_t5] +1*shed_hr5_scen2 -1*spill_hr5_scen2 +1*P_gen0_hr5_scen2 +1*P_gen1_hr5_scen2 +1*P_gen2_hr5_scen2 +1*P_gen3_hr5_scen2 = 131.16148394156698
+  [balance_s2_t6] +1*shed_hr6_scen2 -1*spill_hr6_scen2 +1*P_gen0_hr6_scen2 +1*P_gen1_hr6_scen2 +1*P_gen2_hr6_scen2 +1*P_gen3_hr6_scen2 = 133.23559948175756
+  [balance_s2_t7] +1*shed_hr7_scen2 -1*spill_hr7_scen2 +1*P_gen0_hr7_scen2 +1*P_gen1_hr7_scen2 +1*P_gen2_hr7_scen2 +1*P_gen3_hr7_scen2 = 116.9395640323923
+  [balance_s2_t8] +1*shed_hr8_scen2 -1*spill_hr8_scen2 +1*P_gen0_hr8_scen2 +1*P_gen1_hr8_scen2 +1*P_gen2_hr8_scen2 +1*P_gen3_hr8_scen2 = 166.5804439542917
+  [balance_s2_t9] +1*shed_hr9_scen2 -1*spill_hr9_scen2 +1*P_gen0_hr9_scen2 +1*P_gen1_hr9_scen2 +1*P_gen2_hr9_scen2 +1*P_gen3_hr9_scen2 = 183.9104796682991
+  [balance_s2_t10] +1*shed_hr10_scen2 -1*spill_hr10_scen2 +1*P_gen0_hr10_scen2 +1*P_gen1_hr10_scen2 +1*P_gen2_hr10_scen2 +1*P_gen3_hr10_scen2 = 145.68459182122368
+  [balance_s2_t11] +1*shed_hr11_scen2 -1*spill_hr11_scen2 +1*P_gen0_hr11_scen2 +1*P_gen1_hr11_scen2 +1*P_gen2_hr11_scen2 +1*P_gen3_hr11_scen2 = 174.60186874584707
+  [balance_s2_t12] +1*shed_hr12_scen2 -1*spill_hr12_scen2 +1*P_gen0_hr12_scen2 +1*P_gen1_hr12_scen2 +1*P_gen2_hr12_scen2 +1*P_gen3_hr12_scen2 = 205.8925171459601
+  [balance_s2_t13] +1*shed_hr13_scen2 -1*spill_hr13_scen2 +1*P_gen0_hr13_scen2 +1*P_gen1_hr13_scen2 +1*P_gen2_hr13_scen2 +1*P_gen3_hr13_scen2 = 146.88537430140343
+  [balance_s2_t14] +1*shed_hr14_scen2 -1*spill_hr14_scen2 +1*P_gen0_hr14_scen2 +1*P_gen1_hr14_scen2 +1*P_gen2_hr14_scen2 +1*P_gen3_hr14_scen2 = 141.12979120017923
+  [balance_s2_t15] +1*shed_hr15_scen2 -1*spill_hr15_scen2 +1*P_gen0_hr15_scen2 +1*P_gen1_hr15_scen2 +1*P_gen2_hr15_scen2 +1*P_gen3_hr15_scen2 = 138.80282085784674
+  [balance_s2_t16] +1*shed_hr16_scen2 -1*spill_hr16_scen2 +1*P_gen0_hr16_scen2 +1*P_gen1_hr16_scen2 +1*P_gen2_hr16_scen2 +1*P_gen3_hr16_scen2 = 172.64279082471685
+  [balance_s2_t17] +1*shed_hr17_scen2 -1*spill_hr17_scen2 +1*P_gen0_hr17_scen2 +1*P_gen1_hr17_scen2 +1*P_gen2_hr17_scen2 +1*P_gen3_hr17_scen2 = 102.35956953911611
+  [balance_s2_t18] +1*shed_hr18_scen2 -1*spill_hr18_scen2 +1*P_gen0_hr18_scen2 +1*P_gen1_hr18_scen2 +1*P_gen2_hr18_scen2 +1*P_gen3_hr18_scen2 = 84.54149224487364
+  [balance_s2_t19] +1*shed_hr19_scen2 -1*spill_hr19_scen2 +1*P_gen0_hr19_scen2 +1*P_gen1_hr19_scen2 +1*P_gen2_hr19_scen2 +1*P_gen3_hr19_scen2 = 143.07419100752782
+  [balance_s2_t20] +1*shed_hr20_scen2 -1*spill_hr20_scen2 +1*P_gen0_hr20_scen2 +1*P_gen1_hr20_scen2 +1*P_gen2_hr20_scen2 +1*P_gen3_hr20_scen2 = 92.77089670541287
+  [balance_s2_t21] +1*shed_hr21_scen2 -1*spill_hr21_scen2 +1*P_gen0_hr21_scen2 +1*P_gen1_hr21_scen2 +1*P_gen2_hr21_scen2 +1*P_gen3_hr21_scen2 = 91.98247477805168
+  [balance_s2_t22] +1*shed_hr22_scen2 -1*spill_hr22_scen2 +1*P_gen0_hr22_scen2 +1*P_gen1_hr22_scen2 +1*P_gen2_hr22_scen2 +1*P_gen3_hr22_scen2 = 91.75207889599943
+  [balance_s2_t23] +1*shed_hr23_scen2 -1*spill_hr23_scen2 +1*P_gen0_hr23_scen2 +1*P_gen1_hr23_scen2 +1*P_gen2_hr23_scen2 +1*P_gen3_hr23_scen2 = 82.58041783229545
   [upper_s0_t0_g0] -150.945*u_gen0_hr0 +1*P_gen0_hr0_scen0 <= 0.0
   [lower_s0_t0_g0] +22.6418*u_gen0_hr0 -1*P_gen0_hr0_scen0 <= 0.0
   [upper_s0_t0_g1] -114.053*u_gen1_hr0 +1*P_gen1_hr0_scen0 <= 0.0

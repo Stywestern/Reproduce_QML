@@ -28,6 +28,7 @@ class SUCProblemData:
     demand: np.ndarray         # (S, T), generators must met this
     wind: np.ndarray           # (S, T), eases the generator load
     shed_cost: float = 1000.0  # $/MWh, If in any scenario we have to cut electricity from people, we want to penalize that
+    spill_cost: float = 100.0    # $/MWh, Cost/penalty for curtailing excess generation (spill), we also want to penalize that but not that much, it can be redirected
 
     def __post_init__(self):
             N, T, S = self.num_gens, self.num_hours, self.num_scenarios
@@ -54,7 +55,8 @@ class SUCProblemData:
                  scenario_probs: np.ndarray | None = None,
                  demand: np.ndarray | None = None,
                  wind: np.ndarray | None = None,
-                 shed_cost: float | None = None) -> "SUCProblemData":
+                 shed_cost: float | None = None,
+                 spill_cost: float | None = None) -> "SUCProblemData":
         """
         Builds the problem data by prioritizing user-supplied arrays. 
         If a specific array is not provided (is None), it generates a synthetic 
@@ -80,6 +82,7 @@ class SUCProblemData:
         actual_c_var = c_var if c_var is not None else 15 + 35 * tier
         actual_c_fixed = c_fixed if c_fixed is not None else 500 - 400 * tier
         actual_shed_cost = shed_cost if shed_cost is not None else 1000.0
+        actual_spill_cost = spill_cost if spill_cost is not None else 100.0
 
         # 3. Operational Structures
         if min_up is not None:
@@ -134,7 +137,8 @@ class SUCProblemData:
             scenario_probs=actual_probs, 
             demand=actual_demand, 
             wind=actual_wind,
-            shed_cost=actual_shed_cost
+            shed_cost=actual_shed_cost,
+            spill_cost=actual_spill_cost
         )
 
 # ============================================================================
@@ -199,6 +203,39 @@ class MILPModel:
         if lo == -np.inf:
             return "<=", hi
         return ">=", lo
+
+    def add_row(self, coeffs: dict[str, float], sense: str, rhs: float, label: str = "", scenario: int | None = None):
+        """
+        Incrementally appends a single constraint row directly to the built matrices.
+        """
+        assert sense in ("<=", ">=", "="), f"unknown sense {sense!r}"
+        
+        # 1. Parse coefficients into column indices
+        row_cols = []
+        row_vals = []
+        for name, coeff in coeffs.items():
+            if coeff != 0:
+                row_cols.append(self._index[name])
+                row_vals.append(coeff)
+                
+        # 2. Build a 1-row sparse matrix for the new constraint
+        n_cols = len(self.var_names)
+        new_row_matrix = sp.coo_matrix(
+            (row_vals, ([0] * len(row_cols), row_cols)), 
+            shape=(1, n_cols)
+        ).tocsr()
+        
+        # 3. Vertically stack it onto the existing A matrix
+        self.A = sp.vstack([self.A, new_row_matrix]).tocsr()
+        
+        # 4. Calculate bounds
+        lo, hi = {"<=": (-np.inf, rhs), ">=": (rhs, np.inf), "=": (rhs, rhs)}[sense]
+        
+        # 5. Append to the numpy arrays and lists
+        self.row_lower = np.append(self.row_lower, lo)
+        self.row_upper = np.append(self.row_upper, hi)
+        self.row_scenario = np.append(self.row_scenario, -1 if scenario is None else scenario)
+        self.constraint_labels.append(label)
  
  
 class MILPBuilder:
@@ -312,6 +349,9 @@ class SUCModelBuilder:
  
     def _shed_name(self, t: int, s: int) -> str:
         return f"shed_hr{t}_scen{s}"
+
+    def _spill_name(self, t: int, s: int) -> str:
+        return f"spill_hr{t}_scen{s}"
  
     # -- variables --------------------------------------------------------
     def setup_variables(self):
@@ -322,6 +362,7 @@ class SUCModelBuilder:
         for s in range(S):
             for t in range(T):
                 self.builder.add_var(self._shed_name(t, s), "C", 0.0, 10000.0, scenario=s)
+                self.builder.add_var(self._spill_name(t, s), "C", 0.0, 10000.0, scenario=s)
                 for g in range(N):
                     self.builder.add_var(self._p_name(g, t, s), "C", 0.0, self.pd.p_max[g],
                                           scenario=s)
@@ -336,6 +377,7 @@ class SUCModelBuilder:
             prob = self.pd.scenario_probs[s]
             for t in range(T):
                 self.builder.add_obj(self._shed_name(t, s), prob * self.pd.shed_cost)
+                self.builder.add_obj(self._spill_name(t, s), prob * self.pd.spill_cost)
                 for g in range(N):
                     self.builder.add_obj(self._p_name(g, t, s), prob * self.pd.c_var[g])
  
@@ -345,7 +387,7 @@ class SUCModelBuilder:
         for s in range(S):
             for t in range(T):
                 net_demand = self.pd.demand[s, t] - self.pd.wind[s, t]
-                coeffs = {self._shed_name(t, s): 1.0}
+                coeffs = {self._shed_name(t, s): 1.0, self._spill_name(t, s): -1.0}
                 for g in range(N):
                     coeffs[self._p_name(g, t, s)] = 1.0
                 self.builder.add_row(coeffs, "=", net_demand, f"balance_s{s}_t{t}", scenario=s)
