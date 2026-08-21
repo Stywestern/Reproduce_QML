@@ -27,8 +27,8 @@ class SUCProblemData:
     scenario_probs: np.ndarray  # (S,), sums to 1
     demand: np.ndarray         # (S, T), generators must met this
     wind: np.ndarray           # (S, T), eases the generator load
-    shed_cost: float = 1000.0  # $/MWh, If in any scenario we have to cut electricity from people, we want to penalize that
-    spill_cost: float = 100.0    # $/MWh, Cost/penalty for curtailing excess generation (spill), we also want to penalize that but not that much, it can be redirected
+    shed_cost: float           # $/MWh, If in any scenario we have to cut electricity from people, we want to penalize that
+    spill_cost: float          # $/MWh, Cost/penalty for curtailing excess generation (spill), we also want to penalize that but not that much, it can be redirected
 
     def __post_init__(self):
             N, T, S = self.num_gens, self.num_hours, self.num_scenarios
@@ -81,8 +81,8 @@ class SUCProblemData:
         # 2. Generator Costs
         actual_c_var = c_var if c_var is not None else 15 + 35 * tier
         actual_c_fixed = c_fixed if c_fixed is not None else 500 - 400 * tier
-        actual_shed_cost = shed_cost if shed_cost is not None else 1000.0
-        actual_spill_cost = spill_cost if spill_cost is not None else 100.0
+        actual_shed_cost = shed_cost if shed_cost is not None else 200
+        actual_spill_cost = spill_cost if spill_cost is not None else 100
 
         # 3. Operational Structures
         if min_up is not None:

@@ -1,2 +1,1 @@
-
-        num_scenarios=num_scenarios,
+print(f"  -> Solver Status:        {status_str}")

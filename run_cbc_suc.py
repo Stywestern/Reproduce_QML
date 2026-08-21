@@ -6,7 +6,7 @@ import pulp
 import numpy as np
 
 from src.problems.suc_problem_generator import SUCProblemData, SUCModelBuilder, MILPModel
-from src.problems.generated_problems import g4t24s3_suc_problem, tiny_suc_problem
+from src.problems.generated_problems import g4t24s3_suc_problem, g10t24s10_suc_problem, tiny_suc_problem, long_horizon_suc_problem, many_scenario_suc_problem
 
 def lbo_to_pulp(model: MILPModel) -> tuple[pulp.LpProblem, dict[str, pulp.LpVariable]]:
     """
@@ -69,10 +69,14 @@ if __name__ == "__main__":
     # ---------------------------------------------------------
     print("\n[1. Instantiating Problem Blueprint]")
     seed = 2
-    num_hours = 3
+    num_hours = 24
     num_scenarios = 2
 
-    pd = tiny_suc_problem(seed=seed)
+    #pd, prob_name = tiny_suc_problem(seed=seed)
+    #pd, prob_name = long_horizon_suc_problem(seed=seed)
+    pd, prob_name = g4t24s3_suc_problem(seed=seed)
+    #pd, prob_name = g10t24s10_suc_problem(seed=seed)
+
     builder = SUCModelBuilder(pd)
     base_model = builder.get_base_model()  # MILPModel is already the compiled matrix form
 
@@ -198,7 +202,7 @@ results_payload = {
 }
 
 os.makedirs("results", exist_ok=True)
-json_path = os.path.join("results", "pulp_cbc_suc.json")
+json_path = os.path.join("results", f"pulp_cbc_suc_{prob_name}.json")
 with open(json_path, "w", encoding="utf-8") as f:
     json.dump(results_payload, f, indent=4)
 
